@@ -21,3 +21,9 @@ I do **not** encourage or condone any illegal activity. This repository and its 
 ---
 
 ✅ Stay informed. Stay legal.
+
+## Copyright
+
+© 2025 Malionaro Mayer. All rights reserved.
+
+This repository and its contents are protected by copyright law. Any unauthorized use, reproduction, or distribution is strictly prohibited.
