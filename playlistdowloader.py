@@ -4,6 +4,7 @@ import sys
 import subprocess
 import urllib.request
 import zipfile
+import tempfile
 import shutil
 import platform
 from tkinter import messagebox
@@ -12,6 +13,50 @@ from tkinter import ttk, filedialog, scrolledtext
 import threading
 import yt_dlp
 from pathlib import Path
+import requests
+from packaging import version
+
+LOCAL_VERSION = "1.4"
+GITHUB_RELEASES_URL = "https://api.github.com/repos/Malionaro/Johann-Youtube-Soundcload/releases/latest"
+
+__version__ = "1.4"
+
+def check_for_updates(log_func):
+    try:
+        log_func("🔍 Suche nach Updates...")
+
+        response = requests.get(GITHUB_RELEASES_URL, timeout=10)
+        response.raise_for_status()
+        latest = response.json()
+        latest_version = latest["tag_name"].lstrip("v")
+
+        if version.parse(latest_version) > version.parse(LOCAL_VERSION):
+            log_func(f"⬆️ Neue Version verfügbar: {latest_version}")
+            exe_asset = next((a for a in latest["assets"] if a["name"].endswith(".exe")), None)
+            if not exe_asset:
+                log_func("⚠️ Keine EXE-Datei im Release gefunden.")
+                return
+
+            download_url = exe_asset["browser_download_url"]
+            exe_name = exe_asset["name"]
+
+            log_func(f"⬇️ Lade {exe_name} herunter...")
+
+            with requests.get(download_url, stream=True) as r:
+                r.raise_for_status()
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".exe") as tmp_file:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        tmp_file.write(chunk)
+                    exe_path = tmp_file.name
+
+            log_func("🚀 Starte das Update...")
+            subprocess.Popen([exe_path], shell=True)
+            sys.exit(0)
+
+        else:
+            log_func("✅ Keine neue Version gefunden.")
+    except Exception as e:
+        log_func(f"⚠️ Fehler bei der Update-Prüfung: {e}")
 
 # === Hilfsfunktionen ===
 def check_ffmpeg_installed():
@@ -23,31 +68,32 @@ def check_ffmpeg_installed():
     except Exception:
         return False
 
-def install_ffmpeg():
-    """Installiert FFmpeg unter Windows über winget oder unter Linux über apt."""
+def install_ffmpeg(log_func=print):
+    """Installiert FFmpeg unter Windows oder Linux."""
     if platform.system() == "Windows":
-        print("🔧 Starte FFmpeg-Installation über winget...")
+        log_func("🔧 Starte FFmpeg-Installation über winget...")
         try:
-            result = subprocess.run(["winget", "install", "--id=Gyan.FFmpeg", "-e", "--silent"], check=True)
-            print("✅ FFmpeg wurde erfolgreich mit winget installiert.")
+            result = subprocess.run(["winget", "install", "--id=Gyan.FFmpeg", "-e", "--silent"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            log_func(result.stdout)
+            log_func("✅ FFmpeg wurde erfolgreich installiert.")
             return True
         except subprocess.CalledProcessError as e:
-            print("❌ Fehler bei der Installation von FFmpeg mit winget.")
-            print(e)
+            log_func("❌ Fehler bei der Installation von FFmpeg mit winget.")
+            log_func(e.stderr)
             return False
     elif platform.system() == "Linux":
-        print("🔧 Starte FFmpeg-Installation über apt...")
+        log_func("🔧 Starte FFmpeg-Installation über apt...")
         try:
             subprocess.run(['sudo', 'apt-get', 'update'], check=True)
             subprocess.run(['sudo', 'apt-get', 'install', '-y', 'ffmpeg'], check=True)
-            print("✅ FFmpeg wurde erfolgreich über apt installiert.")
+            log_func("✅ FFmpeg wurde erfolgreich installiert.")
             return True
         except subprocess.CalledProcessError as e:
-            print("❌ Fehler bei der Installation von FFmpeg unter Linux.")
-            print(e)
+            log_func("❌ Fehler bei der Installation von FFmpeg unter Linux.")
+            log_func(str(e))
             return False
     else:
-        print("⚠️ Plattform nicht unterstützt für automatische FFmpeg-Installation.")
+        log_func("⚠️ Plattform nicht unterstützt.")
         return False
 
 
@@ -69,7 +115,12 @@ class DownloaderApp:
         style.theme_use("clam")
         style.configure("TLabel", foreground="white", background="#2a2a2a", font=("Segoe UI", 12))
         style.configure("TButton", font=("Segoe UI", 12), width=20)
-        style.configure("TProgressbar", thickness=20)
+        style.configure("TProgressbar",
+                thickness=20,
+                length=650,
+                maximum=100,
+                background="#4caf50",  # Grüne Farbe für den Fortschrittsbalken
+                )
 
         try:
             self.root.iconbitmap("app_icon.ico")
@@ -85,8 +136,15 @@ class DownloaderApp:
         self.url_entry = tk.Entry(root, width=85, font=("Segoe UI", 12), borderwidth=2, relief="solid")
         self.url_entry.pack(pady=5, ipady=5)
 
-        self.choose_folder_button = ttk.Button(root, text="📁 Zielordner auswählen", command=self.choose_folder)
-        self.choose_folder_button.pack(pady=(10, 5))
+        folder_url_frame = tk.Frame(root, bg="#2a2a2a")
+        folder_url_frame.pack(pady=(10, 5))
+
+        self.choose_folder_button = ttk.Button(folder_url_frame, text="📁 Zielordner auswählen", command=self.choose_folder)
+        self.choose_folder_button.pack(side="left", padx=(0, 10))
+
+        self.clear_url_button = ttk.Button(folder_url_frame, text="🧹 URL leeren", command=self.clear_url)
+        self.clear_url_button.pack(side="left")
+
 
         self.download_button = ttk.Button(root, text="⬇️  Download starten", command=self.start_download_thread, state="disabled")
         self.download_button.pack(pady=(20, 10))
@@ -106,13 +164,17 @@ class DownloaderApp:
         self.log_output = scrolledtext.ScrolledText(root, height=12, width=85, state='disabled', bg="#333333", fg="white", font=("Consolas", 11))
         self.log_output.pack(pady=10)
 
-        self.version_label = ttk.Label(root, text="Version 1.2", font=("Segoe UI", 10), foreground="lightgray", background="#2a2a2a")
+        self.version_label = ttk.Label(root, text="V1.4", font=("Segoe UI", 10), foreground="lightgray", background="#2a2a2a")
         self.version_label.pack(side="bottom", pady=5)
 
         self.download_folder = os.path.expanduser("~")
         os.makedirs("downloads", exist_ok=True)
         self.download_thread = None
         self.abort_event = threading.Event()
+
+    def clear_url(self):
+        self.url_entry.delete(0, tk.END)
+        self.log("🧹 URL-Feld wurde geleert.")
 
     def log(self, message):
         self.log_output.config(state='normal')
@@ -135,10 +197,11 @@ class DownloaderApp:
         self.download_thread.start()
 
     def cancel_download(self):
-        response = messagebox.askyesno("Abbrechen", "Möchten Sie den Download wirklich abbrechen?", icon='warning')
+        response = messagebox.askyesno("Abbrechen", "Möchten Sie das Programm wirklich beenden?", icon='warning')
         if response:
-            self.warning_label.config(text="⚠️ Download wird abgebrochen...")
-            self.abort_event.set()
+            self.root.quit()  # Beendet die Tkinter-Anwendung
+            sys.exit()        # Beendet das gesamte Programm
+
 
     def progress_hook(self, d):
         if self.abort_event.is_set():
@@ -229,7 +292,12 @@ class YTDLogger:
         self.app.log("[FEHLER] " + msg)
 
 # === Startpunkt ===
+def startup_log(msg):
+    print(msg.encode("ascii", "ignore").decode())  # vermeidet UnicodeEncodeError in der Konsole
+    
 if __name__ == "__main__":
+    check_for_updates(startup_log)
+
     if not check_ffmpeg_installed():
         messagebox.showinfo("FFmpeg fehlt", "FFmpeg wird jetzt installiert...")
         if not install_ffmpeg():
