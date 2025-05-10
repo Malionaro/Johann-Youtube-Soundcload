@@ -4,6 +4,7 @@ import sys
 import subprocess
 import urllib.request
 import zipfile
+import tempfile
 import shutil
 import platform
 from tkinter import messagebox
@@ -12,6 +13,50 @@ from tkinter import ttk, filedialog, scrolledtext
 import threading
 import yt_dlp
 from pathlib import Path
+import requests
+from packaging import version
+
+LOCAL_VERSION = "1.3"
+GITHUB_RELEASES_URL = "https://api.github.com/repos/Malionaro/Johann-Youtube-Soundcload/releases/latest"
+
+__version__ = "1.3"
+
+def check_for_updates(log_func):
+    try:
+        log_func("🔍 Suche nach Updates...")
+
+        response = requests.get(GITHUB_RELEASES_URL, timeout=10)
+        response.raise_for_status()
+        latest = response.json()
+        latest_version = latest["tag_name"].lstrip("v")
+
+        if version.parse(latest_version) > version.parse(LOCAL_VERSION):
+            log_func(f"⬆️ Neue Version verfügbar: {latest_version}")
+            exe_asset = next((a for a in latest["assets"] if a["name"].endswith(".exe")), None)
+            if not exe_asset:
+                log_func("⚠️ Keine EXE-Datei im Release gefunden.")
+                return
+
+            download_url = exe_asset["browser_download_url"]
+            exe_name = exe_asset["name"]
+
+            log_func(f"⬇️ Lade {exe_name} herunter...")
+
+            with requests.get(download_url, stream=True) as r:
+                r.raise_for_status()
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".exe") as tmp_file:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        tmp_file.write(chunk)
+                    exe_path = tmp_file.name
+
+            log_func("🚀 Starte das Update...")
+            subprocess.Popen([exe_path], shell=True)
+            sys.exit(0)
+
+        else:
+            log_func("✅ Keine neue Version gefunden.")
+    except Exception as e:
+        log_func(f"⚠️ Fehler bei der Update-Prüfung: {e}")
 
 # === Hilfsfunktionen ===
 def check_ffmpeg_installed():
@@ -23,31 +68,32 @@ def check_ffmpeg_installed():
     except Exception:
         return False
 
-def install_ffmpeg():
-    """Installiert FFmpeg unter Windows über winget oder unter Linux über apt."""
+def install_ffmpeg(log_func=print):
+    """Installiert FFmpeg unter Windows oder Linux."""
     if platform.system() == "Windows":
-        print("🔧 Starte FFmpeg-Installation über winget...")
+        log_func("🔧 Starte FFmpeg-Installation über winget...")
         try:
-            result = subprocess.run(["winget", "install", "--id=Gyan.FFmpeg", "-e", "--silent"], check=True)
-            print("✅ FFmpeg wurde erfolgreich mit winget installiert.")
+            result = subprocess.run(["winget", "install", "--id=Gyan.FFmpeg", "-e", "--silent"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            log_func(result.stdout)
+            log_func("✅ FFmpeg wurde erfolgreich installiert.")
             return True
         except subprocess.CalledProcessError as e:
-            print("❌ Fehler bei der Installation von FFmpeg mit winget.")
-            print(e)
+            log_func("❌ Fehler bei der Installation von FFmpeg mit winget.")
+            log_func(e.stderr)
             return False
     elif platform.system() == "Linux":
-        print("🔧 Starte FFmpeg-Installation über apt...")
+        log_func("🔧 Starte FFmpeg-Installation über apt...")
         try:
             subprocess.run(['sudo', 'apt-get', 'update'], check=True)
             subprocess.run(['sudo', 'apt-get', 'install', '-y', 'ffmpeg'], check=True)
-            print("✅ FFmpeg wurde erfolgreich über apt installiert.")
+            log_func("✅ FFmpeg wurde erfolgreich installiert.")
             return True
         except subprocess.CalledProcessError as e:
-            print("❌ Fehler bei der Installation von FFmpeg unter Linux.")
-            print(e)
+            log_func("❌ Fehler bei der Installation von FFmpeg unter Linux.")
+            log_func(str(e))
             return False
     else:
-        print("⚠️ Plattform nicht unterstützt für automatische FFmpeg-Installation.")
+        log_func("⚠️ Plattform nicht unterstützt.")
         return False
 
 
@@ -106,7 +152,7 @@ class DownloaderApp:
         self.log_output = scrolledtext.ScrolledText(root, height=12, width=85, state='disabled', bg="#333333", fg="white", font=("Consolas", 11))
         self.log_output.pack(pady=10)
 
-        self.version_label = ttk.Label(root, text="Version 1.2", font=("Segoe UI", 10), foreground="lightgray", background="#2a2a2a")
+        self.version_label = ttk.Label(root, text="V1.3", font=("Segoe UI", 10), foreground="lightgray", background="#2a2a2a")
         self.version_label.pack(side="bottom", pady=5)
 
         self.download_folder = os.path.expanduser("~")
@@ -229,7 +275,12 @@ class YTDLogger:
         self.app.log("[FEHLER] " + msg)
 
 # === Startpunkt ===
+def startup_log(msg):
+    print(msg.encode("ascii", "ignore").decode())  # vermeidet UnicodeEncodeError in der Konsole
+    
 if __name__ == "__main__":
+    check_for_updates(startup_log)
+
     if not check_ffmpeg_installed():
         messagebox.showinfo("FFmpeg fehlt", "FFmpeg wird jetzt installiert...")
         if not install_ffmpeg():

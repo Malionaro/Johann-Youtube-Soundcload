@@ -20,6 +20,21 @@ I do **not** encourage or condone any illegal activity. This repository and its 
 
 ---
 
+## ⚠️ Antivirus Notice
+
+Some antivirus software may flag this program during updates or execution.  
+This is often a **false positive** caused by how compiled executables or auto-updating features behave.
+
+> **This program does not contain any malicious code.**
+
+To avoid issues:
+- Temporarily **disable your antivirus** during the update,  
+- or **add this program as an exception** in your antivirus settings.
+
+Always download the program from this official GitHub repository only.
+
+---
+
 ✅ Stay informed. Stay legal.
 
 ## Copyright
