@@ -1,18 +1,63 @@
-import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext, filedialog
-import threading
-import yt_dlp
+import ctypes
 import os
 import sys
+import subprocess
+import urllib.request
+import zipfile
+import shutil
+import platform
+from tkinter import messagebox
+import tkinter as tk
+from tkinter import ttk, filedialog, scrolledtext
+import threading
+import yt_dlp
+from pathlib import Path
 
-# Für Ressourcen-Zugriff (auch in .exe)
-def resource_path(relative_path):
+# === Hilfsfunktionen ===
+def check_ffmpeg_installed():
+    """Überprüft, ob FFmpeg korrekt installiert und nutzbar ist."""
     try:
-        base_path = sys._MEIPASS
+        result = subprocess.run(['ffmpeg', '-version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        output = result.stdout.lower() + result.stderr.lower()
+        return "ffmpeg version" in output
     except Exception:
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
+        return False
 
+def install_ffmpeg():
+    """Installiert FFmpeg unter Windows über winget oder unter Linux über apt."""
+    if platform.system() == "Windows":
+        print("🔧 Starte FFmpeg-Installation über winget...")
+        try:
+            result = subprocess.run(["winget", "install", "--id=Gyan.FFmpeg", "-e", "--silent"], check=True)
+            print("✅ FFmpeg wurde erfolgreich mit winget installiert.")
+            return True
+        except subprocess.CalledProcessError as e:
+            print("❌ Fehler bei der Installation von FFmpeg mit winget.")
+            print(e)
+            return False
+    elif platform.system() == "Linux":
+        print("🔧 Starte FFmpeg-Installation über apt...")
+        try:
+            subprocess.run(['sudo', 'apt-get', 'update'], check=True)
+            subprocess.run(['sudo', 'apt-get', 'install', '-y', 'ffmpeg'], check=True)
+            print("✅ FFmpeg wurde erfolgreich über apt installiert.")
+            return True
+        except subprocess.CalledProcessError as e:
+            print("❌ Fehler bei der Installation von FFmpeg unter Linux.")
+            print(e)
+            return False
+    else:
+        print("⚠️ Plattform nicht unterstützt für automatische FFmpeg-Installation.")
+        return False
+
+
+def is_admin():
+    try:
+        return os.getuid() == 0
+    except AttributeError:
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+
+# === GUI Klasse ===
 class DownloaderApp:
     def __init__(self, root):
         self.root = root
@@ -20,65 +65,50 @@ class DownloaderApp:
         self.root.geometry("750x720")
         self.root.configure(bg="#2a2a2a")
 
-        # Icon setzen
-        try:
-            icon_path = resource_path("app_icon.ico")
-            self.root.iconbitmap(icon_path)
-        except Exception as e:
-            print(f"⚠️ Icon konnte nicht geladen werden: {e}")
-
-        # Style
         style = ttk.Style()
         style.theme_use("clam")
         style.configure("TLabel", foreground="white", background="#2a2a2a", font=("Segoe UI", 12))
         style.configure("TButton", font=("Segoe UI", 12), width=20)
         style.configure("TProgressbar", thickness=20)
 
-        # Header
+        try:
+            self.root.iconbitmap("app_icon.ico")
+        except:
+            pass
+
         self.header_label = ttk.Label(root, text="🎧 Playlist Downloader", font=("Segoe UI", 16), foreground="lightblue", background="#2a2a2a")
         self.header_label.pack(pady=(20, 10))
 
-        # URL Input
         self.url_label = ttk.Label(root, text="🎧 Playlist- oder Track-URL:")
         self.url_label.pack(pady=(30, 5))
 
         self.url_entry = tk.Entry(root, width=85, font=("Segoe UI", 12), borderwidth=2, relief="solid")
         self.url_entry.pack(pady=5, ipady=5)
 
-        # Choose Folder Button
         self.choose_folder_button = ttk.Button(root, text="📁 Zielordner auswählen", command=self.choose_folder)
         self.choose_folder_button.pack(pady=(10, 5))
 
-        # Download Button
         self.download_button = ttk.Button(root, text="⬇️  Download starten", command=self.start_download_thread, state="disabled")
         self.download_button.pack(pady=(20, 10))
 
-        # Cancel Button
         self.cancel_button = ttk.Button(root, text="❌ Abbrechen", command=self.cancel_download, state='disabled')
         self.cancel_button.pack(pady=(5, 10))
 
-        # Warning Label
         self.warning_label = ttk.Label(root, text="", foreground="yellow", background="#2a2a2a", font=("Segoe UI", 12))
         self.warning_label.pack(pady=(5, 15))
 
-        # Progress Bar
         self.progress = ttk.Progressbar(root, orient='horizontal', length=650, mode='determinate', style="TProgressbar")
         self.progress.pack(pady=5)
 
-        # Status Label
         self.status_label = ttk.Label(root, text="Bereit", font=("Segoe UI", 12), foreground="lightgreen", background="#2a2a2a")
         self.status_label.pack(pady=5)
 
-        # Log Output
-        self.log_output = scrolledtext.ScrolledText(root, height=12, width=85, state='disabled',
-                                                    bg="#333333", fg="white", font=("Consolas", 11))
+        self.log_output = scrolledtext.ScrolledText(root, height=12, width=85, state='disabled', bg="#333333", fg="white", font=("Consolas", 11))
         self.log_output.pack(pady=10)
 
-        # Version Label
-        self.version_label = ttk.Label(root, text="Version 1.1", font=("Segoe UI", 10), foreground="lightgray", background="#2a2a2a")
+        self.version_label = ttk.Label(root, text="Version 1.2", font=("Segoe UI", 10), foreground="lightgray", background="#2a2a2a")
         self.version_label.pack(side="bottom", pady=5)
 
-        # Defaults
         self.download_folder = os.path.expanduser("~")
         os.makedirs("downloads", exist_ok=True)
         self.download_thread = None
@@ -157,8 +187,8 @@ class DownloaderApp:
                     total = len(entries)
                     self.log(f"📂 {total} Titel gefunden.")
                     for i, entry in enumerate(entries, start=1):
-                        if entry is None:
-                            continue
+                        if entry is None or self.abort_event.is_set():
+                            break
                         title = entry.get('title', f"Track {i}")
                         link = entry.get('webpage_url')
                         self.status_label.config(text=f"⬇️ Lade: {title} ({i}/{total})")
@@ -166,9 +196,6 @@ class DownloaderApp:
                         self.progress['value'] = 0
                         self.root.update_idletasks()
                         ydl.download([link])
-                        if self.abort_event.is_set():
-                            self.log("⛔️ Abbruchsignal erhalten.")
-                            break
                 else:
                     title = info.get('title', "Track")
                     self.status_label.config(text=f"⬇️ Lade: {title}")
@@ -201,7 +228,14 @@ class YTDLogger:
     def error(self, msg):
         self.app.log("[FEHLER] " + msg)
 
+# === Startpunkt ===
 if __name__ == "__main__":
+    if not check_ffmpeg_installed():
+        messagebox.showinfo("FFmpeg fehlt", "FFmpeg wird jetzt installiert...")
+        if not install_ffmpeg():
+            messagebox.showerror("Fehler", "FFmpeg konnte nicht installiert werden.")
+            sys.exit(1)
+
     root = tk.Tk()
     app = DownloaderApp(root)
     root.mainloop()
