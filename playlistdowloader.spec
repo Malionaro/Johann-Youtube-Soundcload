@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['playlistdowloader.py'],
+    ['playlistdownloader.py'],
     pathex=[],
     binaries=[],
     datas=[('app_icon.ico', '.')],
@@ -22,11 +22,11 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='playlistdowloader',
+    name='playlistdownloader',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
