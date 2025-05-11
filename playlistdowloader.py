@@ -15,48 +15,22 @@ import yt_dlp
 from pathlib import Path
 import requests
 from packaging import version
+import webbrowser
 
-LOCAL_VERSION = "1.4"
+LOCAL_VERSION = "1.5"
 GITHUB_RELEASES_URL = "https://api.github.com/repos/Malionaro/Johann-Youtube-Soundcload/releases/latest"
 
-__version__ = "1.4"
+__version__ = "1.5"
 
-def check_for_updates(log_func):
+
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
     try:
-        log_func("🔍 Suche nach Updates...")
+        base_path = sys._MEIPASS  # PyInstaller creates this temp folder
+    except Exception:
+        base_path = os.path.abspath(".")
 
-        response = requests.get(GITHUB_RELEASES_URL, timeout=10)
-        response.raise_for_status()
-        latest = response.json()
-        latest_version = latest["tag_name"].lstrip("v")
-
-        if version.parse(latest_version) > version.parse(LOCAL_VERSION):
-            log_func(f"⬆️ Neue Version verfügbar: {latest_version}")
-            exe_asset = next((a for a in latest["assets"] if a["name"].endswith(".exe")), None)
-            if not exe_asset:
-                log_func("⚠️ Keine EXE-Datei im Release gefunden.")
-                return
-
-            download_url = exe_asset["browser_download_url"]
-            exe_name = exe_asset["name"]
-
-            log_func(f"⬇️ Lade {exe_name} herunter...")
-
-            with requests.get(download_url, stream=True) as r:
-                r.raise_for_status()
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".exe") as tmp_file:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        tmp_file.write(chunk)
-                    exe_path = tmp_file.name
-
-            log_func("🚀 Starte das Update...")
-            subprocess.Popen([exe_path], shell=True)
-            sys.exit(0)
-
-        else:
-            log_func("✅ Keine neue Version gefunden.")
-    except Exception as e:
-        log_func(f"⚠️ Fehler bei der Update-Prüfung: {e}")
+    return os.path.join(base_path, relative_path)
 
 # === Hilfsfunktionen ===
 def check_ffmpeg_installed():
@@ -108,69 +82,156 @@ class DownloaderApp:
     def __init__(self, root):
         self.root = root
         self.root.title("🎵 Playlist Downloader – YouTube & SoundCloud")
-        self.root.geometry("750x720")
-        self.root.configure(bg="#2a2a2a")
+        self.root.geometry("750x750")
+        self.root.configure(bg="#1a1a1a")  # Dunkler Hintergrund für modernes Design
 
+        # Stil und Farben
         style = ttk.Style()
         style.theme_use("clam")
-        style.configure("TLabel", foreground="white", background="#2a2a2a", font=("Segoe UI", 12))
-        style.configure("TButton", font=("Segoe UI", 12), width=20)
+        style.configure("TEntry",
+                        font=("Segoe UI", 12),
+                        fieldbackground="#333333",  # Dunkelgrau für Eingabefelder
+                        foreground="white",
+                        relief="flat", 
+                        padding=5)
+        style.configure("TLabel",
+                        foreground="white", 
+                        background="#1a1a1a", 
+                        font=("Segoe UI", 12))
+        style.configure("TButton",
+                font=("Segoe UI", 12),
+                width=20,
+                relief="flat", 
+                padding=10,
+                background="#333333",
+                foreground="white")
+        style.map("TButton",
+                background=[("active", "#444444")],
+                relief=[("pressed", "sunken")])
+
         style.configure("TProgressbar",
-                thickness=20,
-                length=650,
-                maximum=100,
-                background="#4caf50",  # Grüne Farbe für den Fortschrittsbalken
-                )
+                        thickness=20,
+                        length=650,
+                        maximum=100,
+                        background="#4caf50",  # Grüne Farbe
+                        )
 
         try:
-            self.root.iconbitmap("app_icon.ico")
-        except:
-            pass
+            self.root.iconbitmap(resource_path("app_icon.ico"))
+        except Exception as e:
+            print(f"Icon konnte nicht gesetzt werden: {e}")
 
-        self.header_label = ttk.Label(root, text="🎧 Playlist Downloader", font=("Segoe UI", 16), foreground="lightblue", background="#2a2a2a")
-        self.header_label.pack(pady=(20, 10))
+        # Header
+        self.header_label = ttk.Label(root, text="🎧 Playlist Downloader", font=("Segoe UI", 18, "bold"), foreground="lightblue", background="#1a1a1a")
+        self.header_label.pack(pady=(30, 20))
 
+        # URL Eingabefeld
         self.url_label = ttk.Label(root, text="🎧 Playlist- oder Track-URL:")
         self.url_label.pack(pady=(30, 5))
 
-        self.url_entry = tk.Entry(root, width=85, font=("Segoe UI", 12), borderwidth=2, relief="solid")
+        self.url_entry = tk.Entry(root, width=85, font=("Segoe UI", 12), relief="flat")
         self.url_entry.pack(pady=5, ipady=5)
 
-        folder_url_frame = tk.Frame(root, bg="#2a2a2a")
-        folder_url_frame.pack(pady=(10, 5))
+        # Zielordner auswählen Button
+        # === Zwei Zeilen-Layout für Buttons ===
+        button_row1 = tk.Frame(root, bg="#1a1a1a")
+        button_row1.pack(pady=(20, 5))
 
-        self.choose_folder_button = ttk.Button(folder_url_frame, text="📁 Zielordner auswählen", command=self.choose_folder)
-        self.choose_folder_button.pack(side="left", padx=(0, 10))
+        self.choose_folder_button = ttk.Button(button_row1, text="📁 Zielordner auswählen", command=self.choose_folder)
+        self.choose_folder_button.pack(side="left", padx=10)
 
-        self.clear_url_button = ttk.Button(folder_url_frame, text="🧹 URL leeren", command=self.clear_url)
-        self.clear_url_button.pack(side="left")
+        self.clear_url_button = ttk.Button(button_row1, text="❌ Clear URL", command=self.clear_url)
+        self.clear_url_button.pack(side="left", padx=10)
 
+        button_row2 = tk.Frame(root, bg="#1a1a1a")
+        button_row2.pack(pady=(5, 20))
 
-        self.download_button = ttk.Button(root, text="⬇️  Download starten", command=self.start_download_thread, state="disabled")
-        self.download_button.pack(pady=(20, 10))
+        self.download_button = ttk.Button(button_row2, text="⬇️ Download starten", command=self.start_download_thread, state="disabled")
+        self.download_button.pack(side="left", padx=10)
 
-        self.cancel_button = ttk.Button(root, text="❌ Abbrechen", command=self.cancel_download, state='disabled')
-        self.cancel_button.pack(pady=(5, 10))
+        self.cancel_button = ttk.Button(button_row2, text="❌ Abbrechen", command=self.cancel_download, state="disabled")
+        self.cancel_button.pack(side="left", padx=10)
 
-        self.warning_label = ttk.Label(root, text="", foreground="yellow", background="#2a2a2a", font=("Segoe UI", 12))
+        self.update_button = ttk.Button(button_row2, text="🔄 Nach Updates suchen", command=lambda: threading.Thread(target=self.check_for_updates_gui).start())
+        self.update_button.pack(side="left", padx=10)
+        
+        # Warnhinweis
+        self.warning_label = ttk.Label(root, text="", foreground="yellow", background="#1a1a1a", font=("Segoe UI", 12))
         self.warning_label.pack(pady=(5, 15))
 
+        # Fortschrittsbalken
         self.progress = ttk.Progressbar(root, orient='horizontal', length=650, mode='determinate', style="TProgressbar")
-        self.progress.pack(pady=5)
+        self.progress.pack(pady=10)
 
-        self.status_label = ttk.Label(root, text="Bereit", font=("Segoe UI", 12), foreground="lightgreen", background="#2a2a2a")
+        # Statuslabel
+        self.status_label = ttk.Label(root, text="Bereit", font=("Segoe UI", 12), foreground="lightgreen", background="#1a1a1a")
         self.status_label.pack(pady=5)
 
-        self.log_output = scrolledtext.ScrolledText(root, height=12, width=85, state='disabled', bg="#333333", fg="white", font=("Consolas", 11))
+        # Log-Ausgabe (Textbereich)
+        self.log_output = tk.Text(root, height=12, width=85, state='disabled', bg="#333333", fg="white", font=("Consolas", 11), wrap=tk.WORD)
         self.log_output.pack(pady=10)
 
-        self.version_label = ttk.Label(root, text="V1.4", font=("Segoe UI", 10), foreground="lightgray", background="#2a2a2a")
+        # Version label
+        self.version_label = ttk.Label(root, text="V1.5", font=("Segoe UI", 10), foreground="lightgray", background="#1a1a1a")
         self.version_label.pack(side="bottom", pady=5)
 
+        # Default downloadordner
         self.download_folder = os.path.expanduser("~")
         os.makedirs("downloads", exist_ok=True)
         self.download_thread = None
         self.abort_event = threading.Event()
+
+    def check_for_updates_gui(self):
+        try:
+            self.log("🔍 Suche nach Updates...")
+
+            response = requests.get(GITHUB_RELEASES_URL, timeout=10)
+            response.raise_for_status()
+            latest = response.json()
+            latest_version = latest["tag_name"].lstrip("v")
+
+            if version.parse(latest_version) > version.parse(LOCAL_VERSION):
+                self.log(f"⬆️ Neue Version verfügbar: {latest_version}")
+                if not messagebox.askyesno("Update verfügbar", f"Eine neue Version ({latest_version}) ist verfügbar.\nMöchtest du das Update jetzt installieren?"):
+                    self.log("⏭️ Update wurde vom Nutzer übersprungen.")
+                    return
+
+                exe_asset = next((a for a in latest["assets"] if a["name"].endswith(".exe")), None)
+                if not exe_asset:
+                    self.log("⚠️ Keine EXE-Datei im Release gefunden.")
+                    return
+
+                download_url = exe_asset["browser_download_url"]
+                exe_name = exe_asset["name"]
+                self.log(f"⬇️ Lade {exe_name} herunter...")
+
+                with requests.get(download_url, stream=True) as r:
+                    r.raise_for_status()
+                    total = int(r.headers.get('content-length', 0))
+                    downloaded = 0
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".exe") as tmp_file:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            tmp_file.write(chunk)
+                            downloaded += len(chunk)
+                            percent = int((downloaded / total) * 100) if total else 0
+                            self.progress['value'] = percent
+                            self.status_label.config(text=f"⬇️ Lade Update... {percent}%")
+                            self.root.update_idletasks()
+                        exe_path = tmp_file.name
+
+                self.log("🚀 Starte das Update...")
+                messagebox.showinfo("Update", "Das Programm wird jetzt neu gestartet, um das Update zu installieren.")
+                self.root.quit()
+                webbrowser.open("https://github.com/Malionaro/Johann-Youtube-Soundcload/releases/latest")
+                messagebox.showinfo("Update verfügbar", "Bitte lade die neue Version manuell herunter.")
+            else:
+                self.log("✅ Keine neue Version gefunden.")
+                messagebox.showinfo("Keine Updates", "Du hast bereits die neueste Version.")
+        except Exception as e:
+            self.log(f"⚠️ Fehler bei der Update-Prüfung: {e}")
+            messagebox.showerror("Update-Fehler", f"Fehler beim Überprüfen auf Updates:\n{e}")
+
+
 
     def clear_url(self):
         self.url_entry.delete(0, tk.END)
@@ -201,7 +262,6 @@ class DownloaderApp:
         if response:
             self.root.quit()  # Beendet die Tkinter-Anwendung
             sys.exit()        # Beendet das gesamte Programm
-
 
     def progress_hook(self, d):
         if self.abort_event.is_set():
@@ -296,8 +356,6 @@ def startup_log(msg):
     print(msg.encode("ascii", "ignore").decode())  # vermeidet UnicodeEncodeError in der Konsole
     
 if __name__ == "__main__":
-    check_for_updates(startup_log)
-
     if not check_ffmpeg_installed():
         messagebox.showinfo("FFmpeg fehlt", "FFmpeg wird jetzt installiert...")
         if not install_ffmpeg():
@@ -306,4 +364,9 @@ if __name__ == "__main__":
 
     root = tk.Tk()
     app = DownloaderApp(root)
+
+    # Starte die Update-Prüfung im Hintergrund
+    threading.Thread(target=app.check_for_updates_gui).start()
+
+
     root.mainloop()
