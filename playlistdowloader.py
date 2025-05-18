@@ -16,11 +16,11 @@ from tkinter import messagebox
 from tkinter import ttk, filedialog, scrolledtext
 from packaging import version
 
-LOCAL_VERSION = "1.6"
+LOCAL_VERSION = "1.6.1"
 GITHUB_RELEASES_URL = "https://api.github.com/repos/Malionaro/Johann-Youtube-Soundcload/releases/latest"
 CONFIG_PATH = "config.json"
 
-__version__ = "1.6"
+__version__ = "1.6.1"
 
 def resource_path(relative_path):
     try:
@@ -31,20 +31,48 @@ def resource_path(relative_path):
 
 
 def check_ffmpeg_installed():
+    """Prüft, ob FFmpeg bereits installiert ist."""
     try:
         result = subprocess.run(['ffmpeg', '-version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        output = result.stdout.lower() + result.stderr.lower()
-        return "ffmpeg version" in output
+        return "ffmpeg version" in (result.stdout + result.stderr).lower()
     except Exception:
         return False
 
 
 def install_ffmpeg(log_func=print):
+    """Installiert FFmpeg über das passende Tool je nach Betriebssystem."""
+    os_name = platform.system()
+    log_func(f"🔧 FFmpeg-Installation wird für {os_name} vorbereitet...")
+
+def install_ffmpeg(log_func=print):
     if platform.system() == "Windows":
         log_func("🔧 Starte FFmpeg-Installation über winget...")
+
+        # Prüfen, ob Winget verfügbar ist
         try:
-            result = subprocess.run(["winget", "install", "--id=Gyan.FFmpeg", "-e", "--silent"], check=True,
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["winget", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            log_func("❌ Winget ist nicht verfügbar. Bitte FFmpeg manuell installieren.")
+            try:
+                messagebox.showwarning(
+                    "Winget fehlt",
+                    "⚠️ Das Tool 'winget' ist auf diesem System nicht verfügbar.\n"
+                    "Bitte installiere FFmpeg manuell:\n\n"
+                    "https://www.gyan.dev/ffmpeg/builds/"
+                )
+            except Exception:
+                log_func("⚠️ Hinweisfenster konnte nicht angezeigt werden.")
+            return False
+
+        # Winget ist verfügbar – versuche Installation
+        try:
+            result = subprocess.run(
+                ["winget", "install", "--id=Gyan.FFmpeg", "-e", "--silent"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
             log_func(result.stdout)
             log_func("✅ FFmpeg wurde erfolgreich installiert.")
             return True
@@ -52,6 +80,7 @@ def install_ffmpeg(log_func=print):
             log_func("❌ Fehler bei der Installation von FFmpeg mit winget.")
             log_func(e.stderr)
             return False
+
     elif platform.system() == "Linux":
         log_func("🔧 Starte FFmpeg-Installation über apt...")
         try:
@@ -70,10 +99,14 @@ def install_ffmpeg(log_func=print):
 
 def is_admin():
     try:
-        return os.getuid() == 0
-    except AttributeError:
-        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
 
+if not is_admin():
+    from tkinter import messagebox
+    messagebox.showerror("Administratorrechte benötigt", "⚠️ Bitte starte dieses Programm mit Administratorrechten.")
+    sys.exit(1)
 
 class YTDLogger:
     def __init__(self, app):
@@ -412,8 +445,8 @@ class DownloaderApp:
 if __name__ == "__main__":
     if not check_ffmpeg_installed():
         messagebox.showinfo("FFmpeg fehlt", "FFmpeg wird jetzt installiert...")
-        if not install_ffmpeg():
-            messagebox.showerror("Fehler", "FFmpeg konnte nicht installiert werden.")
+        if not install_ffmpeg(log_func=print):
+            messagebox.showerror("Fehler", "FFmpeg konnte nicht automatisch installiert werden.\nBitte manuell installieren und erneut starten.")
             sys.exit(1)
     root = tk.Tk()
     app = DownloaderApp(root)
