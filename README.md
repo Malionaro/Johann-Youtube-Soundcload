@@ -36,9 +36,3 @@ Always download the program from this official GitHub repository only.
 ---
 
 ✅ Stay informed. Stay legal.
-
-## Copyright
-
-© 2025 Malionaro Mayer. All rights reserved.
-
-This repository and its contents are protected by copyright law. Any unauthorized use, reproduction, or distribution is strictly prohibited.
