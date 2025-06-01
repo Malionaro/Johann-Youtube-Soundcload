@@ -1,10 +1,12 @@
 import tkinter as tk
 import ctypes
+import tarfile
+import shutil
 import os
 import json
 import sys
+import urllib.request
 import subprocess
-import tempfile
 import platform
 import threading
 import webbrowser
@@ -16,11 +18,12 @@ from tkinter import messagebox
 from tkinter import ttk, filedialog, scrolledtext
 from packaging import version
 
-LOCAL_VERSION = "1.6.1"
+LOCAL_VERSION = "1.6.2"
 GITHUB_RELEASES_URL = "https://api.github.com/repos/Malionaro/Johann-Youtube-Soundcload/releases/latest"
 CONFIG_PATH = "config.json"
+os.environ["PATH"] += os.pathsep + "/usr/local/bin"
 
-__version__ = "1.6.1"
+__version__ = "1.6.2"
 
 def resource_path(relative_path):
     try:
@@ -29,6 +32,11 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
+def request_admin_rights():
+    """Fordert Administratorrechte an, wenn sie fehlen."""
+    if os.geteuid() != 0:
+        print("Administratorrechte sind erforderlich. Bitte starte das Skript mit 'sudo'.")
+        sys.exit(1)
 
 def check_ffmpeg_installed():
     """Prüft, ob FFmpeg bereits installiert ist."""
@@ -40,31 +48,19 @@ def check_ffmpeg_installed():
 
 
 def install_ffmpeg(log_func=print):
-    """Installiert FFmpeg über das passende Tool je nach Betriebssystem."""
-    os_name = platform.system()
-    log_func(f"🔧 FFmpeg-Installation wird für {os_name} vorbereitet...")
+    # Überprüfe, ob FFmpeg bereits installiert ist
+    if shutil.which("ffmpeg"):
+        log_func("✅ FFmpeg ist bereits installiert.")
+        return True
 
-def install_ffmpeg(log_func=print):
     if platform.system() == "Windows":
         log_func("🔧 Starte FFmpeg-Installation über winget...")
-
-        # Prüfen, ob Winget verfügbar ist
         try:
             subprocess.run(["winget", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         except (subprocess.CalledProcessError, FileNotFoundError):
             log_func("❌ Winget ist nicht verfügbar. Bitte FFmpeg manuell installieren.")
-            try:
-                messagebox.showwarning(
-                    "Winget fehlt",
-                    "⚠️ Das Tool 'winget' ist auf diesem System nicht verfügbar.\n"
-                    "Bitte installiere FFmpeg manuell:\n\n"
-                    "https://www.gyan.dev/ffmpeg/builds/"
-                )
-            except Exception:
-                log_func("⚠️ Hinweisfenster konnte nicht angezeigt werden.")
             return False
 
-        # Winget ist verfügbar – versuche Installation
         try:
             result = subprocess.run(
                 ["winget", "install", "--id=Gyan.FFmpeg", "-e", "--silent"],
@@ -84,13 +80,59 @@ def install_ffmpeg(log_func=print):
     elif platform.system() == "Linux":
         log_func("🔧 Starte FFmpeg-Installation über apt...")
         try:
-            subprocess.run(['sudo', 'apt-get', 'update'], check=True)
-            subprocess.run(['sudo', 'apt-get', 'install', '-y', 'ffmpeg'], check=True)
+            subprocess.run(['sudo', 'apt-get', 'update'], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(['sudo', 'apt-get', 'install', '-y', 'ffmpeg'], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             log_func("✅ FFmpeg wurde erfolgreich installiert.")
             return True
         except subprocess.CalledProcessError as e:
             log_func("❌ Fehler bei der Installation von FFmpeg unter Linux.")
             log_func(str(e))
+            return False
+
+    elif platform.system() == "Darwin":  # macOS
+        log_func("🔧 Starte FFmpeg-Installation ohne Homebrew...")
+
+        # Prüfen, ob FFmpeg bereits installiert ist
+        if shutil.which("ffmpeg"):
+            log_func("✅ FFmpeg ist bereits installiert.")
+            return True
+
+        try:
+            url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-i686-static.tar.xz"
+            download_dir = "/tmp/ffmpeg"
+            install_dir = "/usr/local/bin"
+
+            # Lade das FFmpeg-Archiv herunter
+            log_func(f"⬇️ Lade FFmpeg herunter von {url}...")
+            archive_path = os.path.join(download_dir, "ffmpeg.tar.xz")
+            urllib.request.urlretrieve(url, archive_path)
+            log_func("✅ Download abgeschlossen.")
+
+            # Entpacke das Archiv
+            log_func("🔧 Entpacke FFmpeg...")
+            with tarfile.open(archive_path, "r:xz") as archive:
+                archive.extractall(download_dir)
+            log_func("✅ Entpacken abgeschlossen.")
+
+            # Bewege die FFmpeg-Dateien nach /usr/local/bin
+            ffmpeg_bin = os.path.join(download_dir, "ffmpeg-*-static", "ffmpeg")
+            ffmpeg_dest = os.path.join(install_dir, "ffmpeg")
+            log_func(f"🔧 Verschiebe FFmpeg nach {install_dir}...")
+            shutil.move(ffmpeg_bin, ffmpeg_dest)
+
+            # Gebe dem ausführbaren Datei die richtigen Berechtigungen
+            os.chmod(ffmpeg_dest, 0o755)
+
+            # Prüfe, ob FFmpeg jetzt im PATH ist
+            if shutil.which("ffmpeg"):
+                log_func("✅ FFmpeg wurde erfolgreich installiert.")
+                return True
+            else:
+                log_func("❌ FFmpeg konnte nicht in den PATH eingefügt werden.")
+                return False
+
+        except Exception as e:
+            log_func(f"❌ Fehler bei der Installation von FFmpeg: {str(e)}")
             return False
     else:
         log_func("⚠️ Plattform nicht unterstützt.")
@@ -103,10 +145,10 @@ def is_admin():
     except:
         return False
 
-if not is_admin():
-    from tkinter import messagebox
-    messagebox.showerror("Administratorrechte benötigt", "⚠️ Bitte starte dieses Programm mit Administratorrechten.")
-    sys.exit(1)
+# if not is_admin():
+#     from tkinter import messagebox
+#     messagebox.showerror("Administratorrechte benötigt", "⚠️ Bitte starte dieses Programm mit Administratorrechten.")
+#     sys.exit(1)
 
 class YTDLogger:
     def __init__(self, app):
@@ -194,14 +236,18 @@ class DownloaderApp:
         style.configure("TCombobox",
             font=("Segoe UI", 12)
         )
+        
         # Mapping für Audio-Codecs
         self.codec_map = {
             "mp3": "mp3", "m4a": "m4a", "wav": "wav", "flac": "flac", "aac": "aac",
             "ogg": "vorbis", "opus": "opus", "wma": "wma", "alac": "alac", "aiff": "aiff", "mp2": "mp2"
         }
-        # Formate
+
         self.formate = [*self.codec_map.keys(), "mp4", "webm", "mkv", "avi", "mov", "flv", "3gp", "wmv", "mpeg", "hevc", "h265"]
+        self.formate.sort()  # sortiert alphabetisch
+
         self.format_var = tk.StringVar(value="mp3")
+
 
         # Frame für Ordner + Format
         folder_and_format_frame = tk.Frame(root, bg="#1a1a1a")
@@ -342,12 +388,17 @@ class DownloaderApp:
         self.log_output.config(state='disabled')
 
     def start_download_thread(self):
+        self.format_combobox.config(state="disabled")
+        self.abort_event.clear()
         self.cancel_button.config(state='normal')
         threading.Thread(target=self.download_playlist).start()
 
     def cancel_download(self):
-        if messagebox.askyesno("Abbrechen", "Möchten Sie den Download wirklich abbrechen?", icon='warning'):
-            self.abort_event.set()
+        # Bestätigungsdialog zeigen
+        if messagebox.askyesno("Beenden", "Möchten Sie die Anwendung wirklich schließen?", icon='warning'):
+            self.log("🛑 Die Anwendung wurde beendet.")
+            self.root.quit()  # Beendet die Anwendung
+            self.root.destroy()  # Zerstört das Fenster und beendet die Anwendung
 
     def progress_hook(self, d):
         if self.abort_event.is_set(): raise yt_dlp.utils.DownloadError("Download abgebrochen")
@@ -362,69 +413,145 @@ class DownloaderApp:
             self.root.update_idletasks()
             self.log("✅ Download abgeschlossen.")
 
+    def log(self, message):
+        # Um sicherzustellen, dass dies im Haupt-Thread passiert
+        self.root.after(0, self._log_message, message)
+
+    def _log_message(self, message):
+        try:
+            self.log_output.config(state='normal')
+            self.log_output.insert(tk.END, message + "\n")
+            self.log_output.yview(tk.END)
+            self.log_output.config(state='disabled')
+        except Exception as e:
+            print(f"Fehler beim Loggen: {e}")
+
+    def update_status_label(self, text):
+        # Update die Statusanzeige im Haupt-Thread
+        self.root.after(0, self._update_status_label, text)
+
+    def _update_status_label(self, text):
+        self.status_label.config(text=text)
+
     def download_playlist(self):
         url = self.url_entry.get().strip()
         if not url:
             messagebox.showerror("Fehler", "Bitte eine URL eingeben.")
             return
 
+        # 👉 Formatwahl deaktivieren, um Änderungen während des Downloads zu verhindern
+        self.format_combobox.config(state='disabled')
+
         fmt = self.format_var.get()
         self.status_label.config(text="🔍 Analysiere URL...")
         self.log("🔍 Starte Analyse der URL...")
 
-        # Optionen je nach Format
         if fmt in self.codec_map:
             codec = self.codec_map[fmt]
-            ydl_opts = {
+            base_opts = {
                 'format': 'bestaudio/best',
-                'outtmpl': os.path.join(self.download_folder, '%(title)s.%(ext)s'),
-                'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': codec, 'preferredquality': '192'}],
-                'quiet': True, 'ignoreerrors': True, 'progress_hooks': [self.progress_hook], 'noplaylist': False, 'logger': YTDLogger(self)
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': codec,
+                    'preferredquality': '192'
+                }],
             }
         else:
-            ydl_opts = {
+            base_opts = {
                 'format': 'bestvideo+bestaudio/best',
-                'outtmpl': os.path.join(self.download_folder, '%(title)s.%(ext)s'),
                 'merge_output_format': fmt,
                 'recode_video': fmt,
+            }
+
+        try:
+            preview_opts = {
+                **base_opts,
+                'outtmpl': '%(title)s.%(ext)s',
                 'quiet': True,
                 'ignoreerrors': True,
-                'progress_hooks': [self.progress_hook],
                 'noplaylist': False,
                 'logger': YTDLogger(self)
             }
 
+            info = yt_dlp.YoutubeDL(preview_opts).extract_info(url, download=False)
+            entries = info.get('entries', [info])
+            self.log(f"📂 {len(entries)} Titel gefunden.")
 
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                entries = info.get('entries', [info])
-                self.log(f"📂 {len(entries)} Titel gefunden.")
-                for i, e in enumerate(entries, 1):
-                    if not e or self.abort_event.is_set(): break
-                    title = e.get('title', f"Track {i}")
-                    link = e.get('webpage_url', url)
-                    self.status_label.config(text=f"⬇️ Lade: {title} ({i}/{len(entries)})")
-                    self.log(f"⬇️ {i}/{len(entries)} – {title}")
-                    self.progress['value'] = 0
-                    #self.root.update_idletasks()
-                    ydl.download([link])
-                    title = e.get("title", f"Track {i}")
-                    #self.preview_listbox.insert(tk.END, f"{i}. {title}")
-                    #self.preview_listbox.selection_clear(0, tk.END)
-                    #self.preview_listbox.selection_set(i-1)
-                    #self.preview_listbox.see(i-1)
+            for i, e in enumerate(entries, 1):
+                if not e:
+                    continue
+                if self.abort_event.is_set():
+                    self.status_label.config(text="❌ Abgebrochen")
+                    self.log("🛑 Der Download wurde abgebrochen.")
+                    break
+
+                title = e.get('title', f"Track {i}")
+                link = e.get('webpage_url', url)
+
+                self.status_label.config(text=f"⬇️ Lade: {title} ({i}/{len(entries)})")
+                self.log(f"⬇️ {i}/{len(entries)} – {title}")
+                self.progress['value'] = 0
+                self.root.update_idletasks()
+
+                ydl_opts = {
+                    **base_opts,
+                    'outtmpl': os.path.join(self.download_folder, '%(title)s.%(ext)s'),
+                    'quiet': True,
+                    'ignoreerrors': True,
+                    'progress_hooks': [self.progress_hook],
+                    'noplaylist': True,
+                    'logger': YTDLogger(self)
+                }
+
+                def download_single():
+                    try:
+                        def progress_hook(d):
+                            if self.abort_event.is_set():
+                                raise yt_dlp.utils.DownloadError("Download abgebrochen")
+                            self.progress_hook(d)
+
+                        ydl_opts['progress_hooks'] = [progress_hook]
+
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                            ydl.download([link])
+                    except Exception as e:
+                        if self.abort_event.is_set():
+                            self.log(f"🛑 Download abgebrochen: {title}")
+                        else:
+                            self.log(f"⚠️ Fehler beim Laden von {title}: {e}")
+
+                t = threading.Thread(target=download_single)
+                t.start()
+
+                while t.is_alive():
+                    if self.abort_event.is_set():
+                        break
+                    self.root.update_idletasks()
+
+                t.join()
+
+                if self.abort_event.is_set():
+                    self.status_label.config(text="❌ Abgebrochen")
+                    self.log("🛑 Der Download wurde abgebrochen.")
+                    break
 
         except Exception as e:
-            self.status_label.config(text="❌ Fehler aufgetreten")
-            self.log(f"❌ Fehler beim Download: {e}")
+            self.root.after(0, self._update_status_label, "❌ Fehler aufgetreten")
+            self.root.after(0, self._log_message, f"❌ Fehler beim Download: {e}")
             messagebox.showerror("Fehler", f"Fehler beim Download:\n{e}")
-            return
 
-        self.status_label.config(text="✅ Download abgeschlossen!")
-        self.progress['value'] = 100
-        self.log("🎉 Alle Titel erfolgreich geladen.")
-        messagebox.showinfo("Fertig", "Alle Dateien wurden erfolgreich heruntergeladen.")
+        finally:
+            # 👉 Formatwahl wieder aktivieren, egal ob Erfolg oder Fehler
+            self.format_combobox.config(state="readonly")
+            self.cancel_button.config(state='disabled')
+
+        if self.abort_event.is_set():
+            self.status_label.config(text="❌ Abgebrochen")
+        else:
+            self.status_label.config(text="✅ Download abgeschlossen!")
+            self.progress['value'] = 1000
+            self.log("🎉 Alle Titel erfolgreich geladen.")
+            messagebox.showinfo("Fertig", "Alle Dateien wurden erfolgreich heruntergeladen.")
 
     def check_for_updates_gui(self):
         try:
@@ -444,12 +571,13 @@ class DownloaderApp:
 
 if __name__ == "__main__":
     if not check_ffmpeg_installed():
-        messagebox.showinfo("FFmpeg fehlt", "FFmpeg wird jetzt installiert...")
-        if not install_ffmpeg(log_func=print):
-            messagebox.showerror("Fehler", "FFmpeg konnte nicht automatisch installiert werden.\nBitte manuell installieren und erneut starten.")
-            sys.exit(1)
+        if messagebox.askyesno("FFmpeg fehlt", "⚠️ FFmpeg ist nicht installiert. Möchten Sie es jetzt installieren?"):
+            success = install_ffmpeg(self.log)
+            if not success:
+                messagebox.showerror("Installation fehlgeschlagen", "❌ FFmpeg konnte nicht installiert werden. Bitte manuell installieren.")
+        else:
+            messagebox.showwarning("FFmpeg benötigt", "❗ Ohne FFmpeg funktioniert der Download nicht korrekt.")
     root = tk.Tk()
     app = DownloaderApp(root)
     threading.Thread(target=app.check_for_updates_gui, daemon=True).start()
     root.mainloop()
-    
