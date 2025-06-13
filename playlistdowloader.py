@@ -20,7 +20,7 @@ from packaging import version
 
 # App-Konfiguration
 APP_NAME = "SoundSync Downloader"
-LOCAL_VERSION = "1.6.2"
+LOCAL_VERSION = "1.7"
 GITHUB_RELEASES_URL = "https://api.github.com/repos/Malionaro/Johann-Youtube-Soundcload/releases/latest"
 CONFIG_PATH = "config.json"
 os.environ["PATH"] += os.pathsep + "/usr/local/bin"
@@ -162,6 +162,7 @@ class DownloaderApp:
         self.format_var = ctk.StringVar(value="mp3")
         self.dark_mode = ctk.BooleanVar(value=True)
         self.abort_event = threading.Event()
+        self.is_downloading = False
 
         # Hauptlayout
         self.root.grid_columnconfigure(0, weight=1)
@@ -425,7 +426,7 @@ class DownloaderApp:
     def update_download_button_state(self, event=None):
         url_filled = bool(self.url_entry.get().strip())
         folder_selected = bool(self.download_folder and os.path.isdir(self.download_folder))
-        state = "normal" if url_filled and folder_selected else "disabled"
+        state = "normal" if url_filled and folder_selected and not self.is_downloading else "disabled"
         self.download_button.configure(state=state)
 
     def clear_url(self):
@@ -440,18 +441,23 @@ class DownloaderApp:
         self.log_output.configure(state="disabled")
 
     def start_download_thread(self):
+        self.is_downloading = True
         self.format_combobox.configure(state="disabled")
         self.abort_event.clear()
         self.cancel_button.configure(state="normal")
         self.download_button.configure(state="disabled")
-        threading.Thread(target=self.download_playlist).start()
+        threading.Thread(target=self.download_playlist, daemon=True).start()
 
     def cancel_download(self):
-        if messagebox.askyesno("Download abbrechen", "Möchten Sie den aktuellen Download wirklich abbrechen?", icon="warning"):
-            self.abort_event.set()
-            self.log("🛑 Download abgebrochen durch Benutzer")
-            self.status_label.configure(text="❌ Abgebrochen", text_color="#FF6B6B")
-            self.cancel_button.configure(state="disabled")
+        if self.is_downloading:
+            if messagebox.askyesno("Download abbrechen", "Möchten Sie den aktuellen Download wirklich abbrechen?", icon="warning"):
+                self.abort_event.set()
+                self.log("🛑 Download abgebrochen durch Benutzer")
+                self.status_label.configure(text="❌ Abgebrochen", text_color="#FF6B6B")
+                self.cancel_button.configure(state="disabled")
+                self.is_downloading = False
+        else:
+            self.log("ℹ️ Es läuft kein Download, der abgebrochen werden könnte.")
 
     def progress_hook(self, d):
         if self.abort_event.is_set():
@@ -477,6 +483,7 @@ class DownloaderApp:
         url = self.url_entry.get().strip()
         if not url:
             messagebox.showerror("Fehler", "Bitte eine URL eingeben.")
+            self.is_downloading = False
             return
 
         fmt = self.format_var.get()
@@ -511,7 +518,8 @@ class DownloaderApp:
                 'logger': YTDLogger(self)
             }
 
-            info = yt_dlp.YoutubeDL(preview_opts).extract_info(url, download=False)
+            with yt_dlp.YoutubeDL(preview_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
             entries = info.get('entries', [info])
             self.log(f"📂 {len(entries)} Titel gefunden.")
             self.progress_label.configure(text=f"{len(entries)} Titel gefunden")
@@ -542,19 +550,17 @@ class DownloaderApp:
                     'logger': YTDLogger(self)
                 }
 
-                def download_single():
-                    try:
-                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                            ydl.download([link])
-                    except Exception as e:
-                        if self.abort_event.is_set():
-                            self.log(f"🛑 Download abgebrochen: {title}")
-                        else:
-                            self.log(f"⚠️ Fehler beim Laden von {title}: {e}")
-
-                t = threading.Thread(target=download_single)
-                t.start()
-                t.join()
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([link])
+                except yt_dlp.utils.DownloadError as e:
+                    if "Download abgebrochen" in str(e):
+                        self.log(f"🛑 Download abgebrochen: {title}")
+                        break
+                    else:
+                        self.log(f"⚠️ Fehler beim Laden von {title}: {e}")
+                except Exception as e:
+                    self.log(f"⚠️ Unerwarteter Fehler beim Laden von {title}: {e}")
 
                 if self.abort_event.is_set():
                     self.update_status_label("❌ Abgebrochen")
@@ -566,13 +572,14 @@ class DownloaderApp:
             self.progress_label.configure(text=f"Fehler: {str(e)[:50]}...")
             self.log(f"❌ Fehler beim Download: {e}")
             messagebox.showerror("Fehler", f"Fehler beim Download:\n{e}")
-
         finally:
             self.format_combobox.configure(state="normal")
             self.cancel_button.configure(state="disabled")
             self.download_button.configure(state="normal")
+            self.is_downloading = False
+            self.update_download_button_state()
 
-        if not self.abort_event.is_set():
+        if not self.abort_event.is_set() and not any((self.abort_event.is_set(), "Fehler" in self.status_label.cget("text"))):
             self.update_status_label("✅ Download abgeschlossen!")
             self.progress_label.configure(text="Alle Downloads abgeschlossen")
             self.log("🎉 Alle Titel erfolgreich geladen.")
