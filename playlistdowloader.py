@@ -17,10 +17,12 @@ from io import BytesIO
 from tkinter import messagebox
 import tkinter.filedialog as filedialog
 from packaging import version
+import time
+import concurrent.futures
 
 # App-Konfiguration
 APP_NAME = "SoundSync Downloader"
-LOCAL_VERSION = "1.7"
+LOCAL_VERSION = "1.8"
 GITHUB_RELEASES_URL = "https://api.github.com/repos/Malionaro/Johann-Youtube-Soundcload/releases/latest"
 CONFIG_PATH = "config.json"
 os.environ["PATH"] += os.pathsep + "/usr/local/bin"
@@ -144,8 +146,8 @@ class DownloaderApp:
     def __init__(self, root):
         self.root = root
         self.root.title(APP_NAME)
-        self.root.geometry("900x750")
-        self.root.minsize(800, 650)
+        self.root.geometry("1000x977")
+        self.root.minsize(900, 750)
         
         # Icon setzen
         icon_path = resource_path("app_icon.ico")
@@ -163,6 +165,12 @@ class DownloaderApp:
         self.dark_mode = ctk.BooleanVar(value=True)
         self.abort_event = threading.Event()
         self.is_downloading = False
+        self.total_tracks = 0
+        self.completed_tracks = 0
+        self.successful_downloads = 0
+        self.downloaded_tracks = []
+        self.thumbnail_cache = {}
+        self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
         # Hauptlayout
         self.root.grid_columnconfigure(0, weight=1)
@@ -330,6 +338,7 @@ class DownloaderApp:
         progress_frame.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
         progress_frame.grid_columnconfigure(0, weight=1)
 
+        # Fortschritt für aktuellen Titel
         self.progress_label = ctk.CTkLabel(
             progress_frame,
             text="Bereit zum Starten",
@@ -347,9 +356,49 @@ class DownloaderApp:
         self.progress.grid(row=1, column=0, padx=10, pady=(0, 5), sticky="ew")
         self.progress.set(0)
 
+        # Gesamtfortschritt
+        self.total_progress_label = ctk.CTkLabel(
+            progress_frame,
+            text="Gesamtfortschritt: 0%",
+            font=("Segoe UI", 12),
+            anchor="w"
+        )
+        self.total_progress_label.grid(row=2, column=0, padx=10, pady=(5, 0), sticky="ew")
+
+        self.total_progress = ctk.CTkProgressBar(
+            progress_frame,
+            orientation="horizontal",
+            mode="determinate",
+            height=20
+        )
+        self.total_progress.grid(row=3, column=0, padx=10, pady=(0, 5), sticky="ew")
+        self.total_progress.set(0)
+
+        # Heruntergeladene Titel
+        downloaded_frame = ctk.CTkFrame(main_frame)
+        downloaded_frame.grid(row=4, column=0, padx=10, pady=10, sticky="nsew")
+        downloaded_frame.grid_columnconfigure(0, weight=1)
+        downloaded_frame.grid_rowconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            downloaded_frame,
+            text="Heruntergeladene Titel:",
+            font=("Segoe UI", 12, "bold"),
+            anchor="w"
+        ).grid(row=0, column=0, padx=10, pady=5, sticky="w")
+
+        # Scrollable Frame für Thumbnails
+        self.scrollable_frame = ctk.CTkScrollableFrame(
+            downloaded_frame,
+            orientation="horizontal",
+            height=140
+        )
+        self.scrollable_frame.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="nsew")
+        self.scrollable_frame.grid_columnconfigure(0, weight=1)
+
         # Log-Ausgabe
         log_frame = ctk.CTkFrame(main_frame)
-        log_frame.grid(row=4, column=0, padx=10, pady=(0, 10), sticky="nsew")
+        log_frame.grid(row=5, column=0, padx=10, pady=(0, 10), sticky="nsew")
         log_frame.grid_columnconfigure(0, weight=1)
         log_frame.grid_rowconfigure(0, weight=1)
 
@@ -446,6 +495,18 @@ class DownloaderApp:
         self.abort_event.clear()
         self.cancel_button.configure(state="normal")
         self.download_button.configure(state="disabled")
+        self.total_tracks = 0
+        self.completed_tracks = 0
+        self.successful_downloads = 0
+        self.downloaded_tracks = []
+        self.thumbnail_cache = {}
+        self.total_progress.set(0)
+        self.total_progress_label.configure(text="Gesamtfortschritt: 0%")
+        
+        # Clear scrollable frame
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
+            
         threading.Thread(target=self.download_playlist, daemon=True).start()
 
     def cancel_download(self):
@@ -479,6 +540,55 @@ class DownloaderApp:
     def update_status_label(self, text):
         self.status_label.configure(text=text)
 
+    def update_total_progress(self):
+        """Aktualisiert den Gesamtfortschrittsbalken und das Label"""
+        if self.total_tracks > 0:
+            progress_value = self.completed_tracks / self.total_tracks
+            self.total_progress.set(progress_value)
+            percent = int(progress_value * 100)
+            self.total_progress_label.configure(text=f"Gesamtfortschritt: {percent}% - "
+                                                    f"{self.completed_tracks}/{self.total_tracks} Titel")
+        else:
+            self.total_progress.set(0)
+            self.total_progress_label.configure(text="Gesamtfortschritt: 0%")
+
+    def load_thumbnail(self, url, title):
+        """Lädt ein Thumbnail im Hintergrund und fügt es zur Liste hinzu"""
+        try:
+            response = requests.get(url)
+            img = Image.open(BytesIO(response.content))
+            img = img.resize((120, 90), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            
+            # Füge Thumbnail zur Liste hinzu
+            self.root.after(0, self.add_thumbnail, photo, title)
+            self.thumbnail_cache[url] = photo
+            return photo
+        except Exception as e:
+            self.log(f"⚠️ Thumbnail-Fehler für '{title}': {e}")
+            return None
+
+    def add_thumbnail(self, photo, title):
+        """Fügt ein Thumbnail zur Scrollable-Frame hinzu (im Hauptthread)"""
+        if self.abort_event.is_set():
+            return
+            
+        frame = ctk.CTkFrame(self.scrollable_frame, width=140, height=120)
+        frame.pack_propagate(False)
+        frame.pack(side="left", padx=5, pady=5)
+        
+        label_img = ctk.CTkLabel(frame, image=photo, text="")
+        label_img.image = photo  # Keep reference
+        label_img.pack(padx=5, pady=(5, 0))
+        
+        label_title = ctk.CTkLabel(
+            frame, 
+            text=title[:20] + "..." if len(title) > 20 else title,
+            font=("Segoe UI", 10),
+            wraplength=130
+        )
+        label_title.pack(padx=5, pady=(0, 5))
+
     def download_playlist(self):
         url = self.url_entry.get().strip()
         if not url:
@@ -491,7 +601,17 @@ class DownloaderApp:
         self.log("🔍 Starte Analyse der URL...")
         self.progress_label.configure(text="Analysiere URL...")
 
+        # Erweiterte Optionen für große Playlists
+        playlist_opts = {
+            'extract_flat': True,
+            'playlistend': 10000,  # Max 10.000 Titel
+            'ignoreerrors': True,
+            'quiet': True
+        }
+
+        # Korrigierte Optionen für Videoformate
         if fmt in self.codec_map:
+            # Audio-Formate
             codec = self.codec_map[fmt]
             base_opts = {
                 'format': 'bestaudio/best',
@@ -502,42 +622,49 @@ class DownloaderApp:
                 }],
             }
         else:
+            # Video-Formate
             base_opts = {
                 'format': 'bestvideo+bestaudio/best',
                 'merge_output_format': fmt,
-                'recode_video': fmt,
+                'postprocessors': [{
+                    'key': 'FFmpegVideoConvertor',
+                    'preferedformat': fmt
+                }]
             }
 
         try:
-            preview_opts = {
-                **base_opts,
-                'outtmpl': '%(title)s.%(ext)s',
-                'quiet': True,
-                'ignoreerrors': True,
-                'noplaylist': False,
-                'logger': YTDLogger(self)
-            }
-
-            with yt_dlp.YoutubeDL(preview_opts) as ydl:
+            # Step 1: Playlist-Informationen extrahieren
+            with yt_dlp.YoutubeDL({**playlist_opts, 'logger': YTDLogger(self)}) as ydl:
                 info = ydl.extract_info(url, download=False)
-            entries = info.get('entries', [info])
-            self.log(f"📂 {len(entries)} Titel gefunden.")
-            self.progress_label.configure(text=f"{len(entries)} Titel gefunden")
+                
+            if 'entries' in info:
+                entries = info['entries']
+            else:
+                entries = [info]
+                
+            self.total_tracks = len(entries)
+            self.log(f"📂 {self.total_tracks} Titel gefunden.")
+            self.progress_label.configure(text=f"{self.total_tracks} Titel gefunden")
+            self.update_total_progress()
 
+            # Step 2: Titel einzeln herunterladen
             for i, e in enumerate(entries, 1):
-                if not e:
-                    continue
                 if self.abort_event.is_set():
                     self.update_status_label("❌ Abgebrochen")
                     self.log("🛑 Der Download wurde abgebrochen.")
                     break
 
                 title = e.get('title', f"Track {i}")
-                link = e.get('webpage_url', url)
+                link = e.get('url') or e.get('webpage_url', url)
+                thumbnail = e.get('thumbnail') or e.get('thumbnails', [{}])[0].get('url') if isinstance(e.get('thumbnails'), list) else None
 
-                self.update_status_label(f"⬇️ Lade: {title} ({i}/{len(entries)})")
-                self.log(f"⬇️ {i}/{len(entries)} – {title}")
-                self.progress_label.configure(text=f"Lade Titel {i}/{len(entries)}")
+                # Thumbnail im Hintergrund laden
+                if thumbnail:
+                    self.thread_pool.submit(self.load_thumbnail, thumbnail, title)
+
+                self.update_status_label(f"⬇️ Lade: {title} ({i}/{self.total_tracks})")
+                self.log(f"⬇️ {i}/{self.total_tracks} – {title}")
+                self.progress_label.configure(text=f"Lade Titel {i}/{self.total_tracks}")
                 self.progress.set(0)
 
                 ydl_opts = {
@@ -553,6 +680,8 @@ class DownloaderApp:
                 try:
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         ydl.download([link])
+                    self.successful_downloads += 1
+                    self.downloaded_tracks.append(title)
                 except yt_dlp.utils.DownloadError as e:
                     if "Download abgebrochen" in str(e):
                         self.log(f"🛑 Download abgebrochen: {title}")
@@ -561,11 +690,17 @@ class DownloaderApp:
                         self.log(f"⚠️ Fehler beim Laden von {title}: {e}")
                 except Exception as e:
                     self.log(f"⚠️ Unerwarteter Fehler beim Laden von {title}: {e}")
+                finally:
+                    self.completed_tracks = i
+                    self.update_total_progress()
 
                 if self.abort_event.is_set():
                     self.update_status_label("❌ Abgebrochen")
                     self.log("🛑 Der Download wurde abgebrochen.")
                     break
+
+                # Pause zwischen Downloads, um Server nicht zu überlasten
+                time.sleep(0.5)
 
         except Exception as e:
             self.update_status_label("❌ Fehler aufgetreten")
@@ -582,8 +717,26 @@ class DownloaderApp:
         if not self.abort_event.is_set() and not any((self.abort_event.is_set(), "Fehler" in self.status_label.cget("text"))):
             self.update_status_label("✅ Download abgeschlossen!")
             self.progress_label.configure(text="Alle Downloads abgeschlossen")
-            self.log("🎉 Alle Titel erfolgreich geladen.")
-            messagebox.showinfo("Fertig", "Alle Dateien wurden erfolgreich heruntergeladen.")
+            
+            # Erfolgsstatistik anzeigen
+            success_rate = (self.successful_downloads / self.total_tracks * 100) if self.total_tracks > 0 else 0
+            self.log(f"🎉 Download abgeschlossen: {self.successful_downloads} von {self.total_tracks} Titeln erfolgreich geladen.")
+            self.log(f"📊 Erfolgsrate: {success_rate:.1f}%")
+            
+            # Liste der heruntergeladenen Titel speichern
+            list_path = os.path.join(self.download_folder, "download_list.txt")
+            with open(list_path, 'w', encoding='utf-8') as f:
+                for title in self.downloaded_tracks:
+                    f.write(f"{title}\n")
+            self.log(f"📝 Liste der heruntergeladenen Titel gespeichert: {list_path}")
+            
+            message = (
+                f"Download abgeschlossen!\n\n"
+                f"Erfolgreich geladene Titel: {self.successful_downloads} von {self.total_tracks}\n"
+                f"Erfolgsrate: {success_rate:.1f}%\n\n"
+                f"Eine Liste der Titel wurde gespeichert unter:\n{list_path}"
+            )
+            messagebox.showinfo("Fertig", message)
 
     def check_for_updates_gui(self):
         try:
