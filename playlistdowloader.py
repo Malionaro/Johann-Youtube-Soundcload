@@ -34,7 +34,7 @@ from tkinter.scrolledtext import ScrolledText
 
 # App-Konfiguration
 APP_NAME = "SoundSync Downloader"
-LOCAL_VERSION = "1.8.5"
+LOCAL_VERSION = "1.9"
 GITHUB_REPO_URL = "https://github.com/Malionaro/Johann-Youtube-Soundcload"
 GITHUB_API_URL = f"https://api.github.com/repos/Malionaro/Johann-Youtube-Soundcload/releases/latest"
 CONFIG_PATH = "config.json"
