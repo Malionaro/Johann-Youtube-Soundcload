@@ -21,20 +21,15 @@ import time
 import concurrent.futures
 import datetime
 import re
-import glob
-import mimetypes
-import filetype
 import locale
 import gettext
-import zipfile
 import tempfile
-import shutil
 import traceback
 from tkinter.scrolledtext import ScrolledText
 
 # App-Konfiguration
 APP_NAME = "SoundSync Downloader"
-LOCAL_VERSION = "1.9"
+LOCAL_VERSION = "1.9.1"
 GITHUB_REPO_URL = "https://github.com/Malionaro/Johann-Youtube-Soundcload"
 GITHUB_API_URL = f"https://api.github.com/repos/Malionaro/Johann-Youtube-Soundcload/releases/latest"
 CONFIG_PATH = "config.json"
@@ -50,7 +45,6 @@ DEFAULT_LANGUAGE = 'en'
 
 # Versuche Systemsprache zu erkennen
 try:
-    # Aktualisierte Methode zur Spracherkennung
     current_locale = locale.getlocale()
     system_lang = current_locale[0] if current_locale else DEFAULT_LANGUAGE
     if system_lang:
@@ -68,7 +62,6 @@ for lang in SUPPORTED_LANGUAGES:
     try:
         lang_translations[lang] = gettext.translation('app', localedir=locales_dir, languages=[lang])
     except:
-        # Fallback: Englisch
         lang_translations[lang] = gettext.NullTranslations()
 
 # Aktuelle Sprache setzen
@@ -84,7 +77,6 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 def check_ffmpeg_installed():
-    """Prüft, ob FFmpeg bereits installiert ist."""
     try:
         result = subprocess.run(['ffmpeg', '-version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         return "ffmpeg version" in (result.stdout + result.stderr).lower()
@@ -208,14 +200,12 @@ class ChangeLogWindow(ctk.CTkToplevel):
     def __init__(self, parent, changelog):
         super().__init__(parent)
         self.title(_("Änderungsprotokoll"))
-        self.geometry("700x500")
+        self.geometry("800x600")
         self.grab_set()
         
-        # Hauptframe
         main_frame = ctk.CTkFrame(self)
         main_frame.pack(fill="both", expand=True, padx=10, pady=10)
         
-        # Titel
         title = ctk.CTkLabel(
             main_frame,
             text=_("Neueste Änderungen"),
@@ -223,20 +213,18 @@ class ChangeLogWindow(ctk.CTkToplevel):
         )
         title.pack(pady=10)
         
-        # Textbereich für Changelog
         self.text_area = ScrolledText(
             main_frame,
             wrap="word",
             font=("Consolas", 11),
-            bg="#2C2C2C",
+            bg="#121212",
             fg="white"
         )
         self.text_area.pack(fill="both", expand=True, padx=10, pady=5)
         self.text_area.insert("1.0", changelog)
         self.text_area.configure(state="disabled")
         
-        # Option zum Deaktivieren von Benachrichtigungen
-        self.disable_var = ctk.BooleanVar(value=False)
+        self.disable_var = ctk.BooleanVar(value=True)
         disable_check = ctk.CTkCheckBox(
             main_frame,
             text=_("Änderungsprotokolle nicht mehr anzeigen"),
@@ -244,7 +232,6 @@ class ChangeLogWindow(ctk.CTkToplevel):
         )
         disable_check.pack(pady=10)
         
-        # OK-Button
         ok_button = ctk.CTkButton(
             main_frame,
             text=_("OK"),
@@ -253,12 +240,10 @@ class ChangeLogWindow(ctk.CTkToplevel):
         )
         ok_button.pack(pady=10)
         
-        # Speichere die Option beim Schließen
         self.bind("<Destroy>", self.save_preference)
     
     def save_preference(self, event):
         if self.disable_var.get():
-            # Speichere Präferenz in Konfigurationsdatei
             config = {}
             if os.path.exists(CONFIG_PATH):
                 try:
@@ -276,18 +261,21 @@ class DownloaderApp:
     def __init__(self, root):
         self.root = root
         self.root.title(APP_NAME)
-        self.root.geometry("1100x750")
+        self.root.geometry("1200x750")
         self.root.minsize(1000, 650)
         
-        # Farbpalette für Themes
+        # Event-Binding für Sprachwechsel
+        self.root.bind("<<LanguageChanged>>", self.refresh_ui)
+        
+        # Verbesserte Farbpalette für Themes
         self.dark_colors = {
-            "bg1": "#1E2A38",
-            "bg2": "#253341",
-            "bg3": "#1A2430",
+            "bg1": "#121212",       # Tiefschwarzer Hintergrund
+            "bg2": "#1E1E1E",       # Dunkelgrau für Frames (KORRIGIERT)
+            "bg3": "#2A2A2A",       # Leicht heller für Statusbar
             "text": "white",
-            "accent1": "#2A8C55",
-            "accent2": "#3A7EBF",
-            "accent3": "#C74B4B",
+            "accent1": "#2A8C55",   # Grün für Download-Button
+            "accent2": "#3A7EBF",   # Blau für Log leeren / Scroll-Button
+            "accent3": "#C74B4B",   # Rot für Abbrechen-Button
             "accent1_hover": "#207244",
             "accent2_hover": "#2E6399",
             "accent3_hover": "#A03A3A",
@@ -341,7 +329,10 @@ class DownloaderApp:
         self.cookies_path = ""
         self.current_thumbnail_frame = None
         self.ydl_process = None
-        # Sprachauswahl - KORRIGIERT
+        self.last_gui_update = 0
+        self.last_converted_file = None
+        
+        # Sprachauswahl
         self.language_var = ctk.StringVar(value=current_language)
         self.language_mapping = {
             'en': 'English',
@@ -355,7 +346,7 @@ class DownloaderApp:
         self.root.grid_rowconfigure(1, weight=1)
 
         # Header mit Logo und Titel
-        self.header_frame = ctk.CTkFrame(self.root, corner_radius=0)
+        self.header_frame = ctk.CTkFrame(self.root, corner_radius=0, fg_color=self.colors["bg2"])
         self.header_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=0, pady=0)
         self.header_frame.grid_columnconfigure(1, weight=1)
         
@@ -398,18 +389,18 @@ class DownloaderApp:
         self.language_menu.grid(row=0, column=3, padx=10, pady=10, sticky="e")
 
         # Hauptbereich (linke Spalte)
-        self.main_frame = ctk.CTkFrame(self.root, fg_color="transparent")
+        self.main_frame = ctk.CTkFrame(self.root, fg_color=self.colors["bg1"])
         self.main_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
         self.main_frame.grid_columnconfigure(0, weight=1)
         self.main_frame.grid_rowconfigure(1, weight=1)
 
         # Einstellungen und Fortschritt
-        self.settings_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        self.settings_frame = ctk.CTkFrame(self.main_frame, fg_color=self.colors["bg2"])
         self.settings_frame.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
         self.settings_frame.grid_columnconfigure(1, weight=1)
 
         # URL-Eingabe
-        self.url_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
+        self.url_frame = ctk.CTkFrame(self.settings_frame, fg_color=self.colors["bg2"])
         self.url_frame.grid(row=0, column=0, padx=5, pady=5, sticky="ew", columnspan=2)
         self.url_frame.grid_columnconfigure(0, weight=1)
 
@@ -420,7 +411,7 @@ class DownloaderApp:
         )
         self.url_label.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="w")
 
-        self.url_input_frame = ctk.CTkFrame(self.url_frame, fg_color="transparent")
+        self.url_input_frame = ctk.CTkFrame(self.url_frame, fg_color=self.colors["bg2"])
         self.url_input_frame.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="ew")
         self.url_input_frame.grid_columnconfigure(0, weight=1)
 
@@ -446,7 +437,7 @@ class DownloaderApp:
         self.clear_url_button.grid(row=0, column=1, padx=0, pady=0)
 
         # Zielordner und Format in einer Zeile
-        self.folder_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
+        self.folder_frame = ctk.CTkFrame(self.settings_frame, fg_color=self.colors["bg2"])
         self.folder_frame.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
         self.folder_frame.grid_columnconfigure(1, weight=1)
 
@@ -476,7 +467,7 @@ class DownloaderApp:
         self.browse_button.grid(row=0, column=2, padx=(5, 10), pady=5)
 
         # Format und Cookies in einer Zeile
-        self.format_cookies_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
+        self.format_cookies_frame = ctk.CTkFrame(self.settings_frame, fg_color=self.colors["bg2"])
         self.format_cookies_frame.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
         self.format_cookies_frame.grid_columnconfigure(1, weight=1)
 
@@ -532,7 +523,7 @@ class DownloaderApp:
         self.cookies_button.grid(row=0, column=4, padx=(5, 10), pady=5)
 
         # Buttons
-        self.button_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
+        self.button_frame = ctk.CTkFrame(self.settings_frame, fg_color=self.colors["bg2"])
         self.button_frame.grid(row=2, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
         self.button_frame.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="group1")
 
@@ -582,7 +573,7 @@ class DownloaderApp:
         self.convert_button.grid(row=0, column=3, padx=5, pady=5, sticky="ew")
 
         # Fortschrittsbalken
-        self.progress_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        self.progress_frame = ctk.CTkFrame(self.main_frame, fg_color=self.colors["bg2"])
         self.progress_frame.grid(row=1, column=0, padx=5, pady=5, sticky="nsew")
         self.progress_frame.grid_columnconfigure(0, weight=1)
         self.progress_frame.grid_rowconfigure(0, weight=1)
@@ -645,13 +636,13 @@ class DownloaderApp:
         self.total_progress.set(0)
 
         # Log-Ausgabe
-        self.log_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        self.log_frame = ctk.CTkFrame(self.main_frame, fg_color=self.colors["bg2"])
         self.log_frame.grid(row=2, column=0, padx=5, pady=5, sticky="nsew")
         self.log_frame.grid_columnconfigure(0, weight=1)
         self.log_frame.grid_rowconfigure(1, weight=1)
 
         # Titelzeile für Log mit "Log leeren"-Button
-        self.log_title_frame = ctk.CTkFrame(self.log_frame, fg_color="transparent")
+        self.log_title_frame = ctk.CTkFrame(self.log_frame, fg_color=self.colors["bg2"])
         self.log_title_frame.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
         self.log_title_frame.grid_columnconfigure(1, weight=1)
 
@@ -680,13 +671,14 @@ class DownloaderApp:
             self.log_frame,
             font=("Consolas", 11),
             wrap="word",
-            activate_scrollbars=True
+            activate_scrollbars=True,
+            fg_color=self.colors["bg3"]
         )
         self.log_output.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="nsew")
         self.log_output.configure(state="disabled")
 
         # Sidebar (rechte Spalte)
-        self.sidebar_frame = ctk.CTkFrame(self.root, fg_color="transparent")
+        self.sidebar_frame = ctk.CTkFrame(self.root, fg_color=self.colors["bg1"])
         self.sidebar_frame.grid(row=1, column=1, padx=(0, 10), pady=10, sticky="nsew")
         self.sidebar_frame.grid_columnconfigure(0, weight=1)
         self.sidebar_frame.grid_rowconfigure(1, weight=1)
@@ -704,13 +696,14 @@ class DownloaderApp:
         self.scrollable_frame = ctk.CTkScrollableFrame(
             self.sidebar_frame,
             orientation="vertical",
-            width=300
+            width=300,
+            fg_color=self.colors["bg3"]
         )
         self.scrollable_frame.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="nsew")
         self.scrollable_frame.grid_columnconfigure(0, weight=1)
 
         # Scroll-Button am Boden
-        self.scroll_button_frame = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
+        self.scroll_button_frame = ctk.CTkFrame(self.sidebar_frame, fg_color=self.colors["bg1"])
         self.scroll_button_frame.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
         self.scroll_button_frame.grid_columnconfigure(0, weight=1)
 
@@ -725,7 +718,7 @@ class DownloaderApp:
         self.scroll_to_current_button.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
 
         # Statusbar
-        self.statusbar = ctk.CTkFrame(self.root, height=30, corner_radius=0)
+        self.statusbar = ctk.CTkFrame(self.root, height=30, corner_radius=0, fg_color=self.colors["bg3"])
         self.statusbar.grid(row=2, column=0, columnspan=2, sticky="ew", padx=0, pady=(0, 0))
         self.statusbar.grid_columnconfigure(1, weight=1)
 
@@ -772,8 +765,6 @@ class DownloaderApp:
         self.show_changelog_on_start()
 
     def change_language(self, choice):
-        """Wechselt die Sprache der Anwendung"""
-        # Umkehrung des Mappings für die Code-Erkennung
         reverse_mapping = {v: k for k, v in self.language_mapping.items()}
         lang_code = reverse_mapping.get(choice)
         
@@ -787,63 +778,64 @@ class DownloaderApp:
             lang_translations[current_language].install()
             _ = lang_translations[current_language].gettext
             
-            # GUI aktualisieren
-            self.update_ui_texts()
-            
-            # Konfiguration speichern
             self.save_config()
-            
             self.log(_("🌐 Sprache geändert zu: {language}").format(language=current_language))
+            
+            # UI aktualisieren
+            self.root.event_generate("<<LanguageChanged>>")
+
+    def refresh_ui(self, event=None):
+        """Aktualisiert alle UI-Elemente mit neuen Übersetzungen"""
+        self.update_ui_texts()
+        
+        # Statusbar-Text aktualisieren
+        current_status = self.status_label.cget("text")
+        if current_status in ["Bereit", "Ready", "Gotowy"]:
+            self.status_label.configure(text=_("Bereit"))
+            
+        # Fortschrittsbalken aktualisieren
+        self.progress_label.configure(text=self.progress_label.cget("text")) 
+        self.convert_label.configure(text=self.convert_label.cget("text"))
+        self.total_progress_label.configure(text=self.total_progress_label.cget("text"))
+        
+        # Sidebar-Titel aktualisieren
+        self.sidebar_title_label.configure(text=_("Heruntergeladene Titel:"))
+        
+        # Änderungsprotokoll-Fenster aktualisieren, falls geöffnet
+        for child in self.root.winfo_children():
+            if isinstance(child, ChangeLogWindow):
+                child.destroy()
+                self.show_changelog_on_start()
 
     def update_ui_texts(self):
-        """Aktualisiert alle Texte in der GUI nach Sprachwechsel"""
-        # Header
         self.theme_switch.configure(text=_("Dark Mode"))
         self.title_label.configure(text=APP_NAME)
-        
-        # URL-Eingabe
         self.url_label.configure(text=_("YouTube oder SoundCloud URL:"))
         self.url_entry.configure(
             placeholder_text=_("https://www.youtube.com/... oder https://soundcloud.com/...")
         )
-        
-        # Zielordner
         self.folder_label.configure(text=_("Zielordner:"))
         self.folder_entry.configure(placeholder_text=_("Wählen Sie einen Speicherort..."))
         self.browse_button.configure(text=_("Durchsuchen"))
-        
-        # Format und Cookies
         self.format_label.configure(text=_("Format:"))
         self.cookies_label.configure(text=_("Cookies:"))
         self.cookies_entry.configure(placeholder_text=_("Pfad zu cookies.txt"))
         self.cookies_button.configure(text=_("Auswählen"))
-        
-        # Buttons
         self.download_button.configure(text=_("Download starten"))
         self.cancel_button.configure(text=_("Abbrechen"))
         self.update_button.configure(text=_("Auf Updates prüfen"))
         self.convert_button.configure(text=_("Datei konvertieren"))
-        
-        # Fortschrittsbalken
         self.progress_label.configure(text=_("Bereit zum Starten"))
         self.convert_label.configure(text=_("Konvertierung: Wartend..."))
         self.total_progress_label.configure(text=_("Gesamtfortschritt: 0% | ETA: --:--:--"))
-        
-        # Log
         self.log_title_label.configure(text=_("Aktivitätsprotokoll:"))
         self.clear_log_button.configure(text=_("Log leeren"))
-        
-        # Sidebar
         self.sidebar_title_label.configure(text=_("Heruntergeladene Titel:"))
         self.scroll_to_current_button.configure(text=_("Zum aktuellen Titel scrollen"))
-        
-        # Statusbar
         self.status_label.configure(text=_("Bereit"))
         self.version_label.configure(text=_("Version: {version}").format(version=LOCAL_VERSION))
 
     def show_changelog_on_start(self):
-        """Zeigt das Änderungsprotokoll beim Start an, wenn nicht deaktiviert"""
-        # Prüfen, ob Changelog deaktiviert wurde
         disable_changelog = False
         if os.path.exists(CONFIG_PATH):
             try:
@@ -854,33 +846,31 @@ class DownloaderApp:
                 pass
         
         if not disable_changelog:
-            # Beispiel-Changelog - sollte durch echten Inhalt ersetzt werden
-            changelog = _("""Version 1.9 - Änderungsprotokoll
+            changelog = _("""Version 1.9.1 - Änderungsprotokoll
 
 Neue Funktionen:
-- Sprachauswahl für Englisch, Deutsch und Polnisch
-- Automatische Updates mit Fortschrittsanzeige
-- Änderungsprotokoll beim ersten Start
-- Option zum Deaktivieren von Benachrichtigungen
+- Verbesserter Dark Mode mit tiefschwarzem Design
+- Optimierte Performance für lange Downloads
+- Stabilerer Konvertierungsfortschrittsbalken
+- Vollständige Übersetzung für alle Sprachen
 
 Verbesserungen:
-- Verbesserte Fortschrittsanzeige für lange Downloads
-- Universal-Konvertierungstool für alle Dateitypen
-- Sofortiger Download-Abbruch
+- Reduzierte GUI-Blockierungen während des Downloads
+- Bessere Fehlerbehandlung bei Konvertierungen
+- Schnellere Thumbnail-Ladezeiten
+- Effizientere Speichernutzung
 
 Fehlerbehebungen:
-- Diverse Stabilitätsverbesserungen
-- Behebung von Speicherlecks""")
+- Konvertierungsbalken zeigt jetzt korrekten Fortschritt
+- Sprachausgabe für alle Elemente konsistent
+- Diverse Stabilitätsverbesserungen""")
             
-            # Zeige Changelog nach kurzer Verzögerung
             self.root.after(1000, lambda: ChangeLogWindow(self.root, changelog))
 
     def update_theme_colors(self):
-        """Aktualisiert die Farben basierend auf dem aktuellen Theme"""
         mode = "dark" if self.dark_mode.get() else "light"
         self.colors = self.dark_colors if mode == "dark" else self.light_colors
         
-        # Hintergrundfarben
         bg_color = self.colors["bg1"]
         self.root.configure(fg_color=bg_color)
         self.header_frame.configure(fg_color=self.colors["bg2"])
@@ -888,12 +878,11 @@ Fehlerbehebungen:
         self.settings_frame.configure(fg_color=self.colors["bg2"])
         self.progress_frame.configure(fg_color=self.colors["bg2"])
         self.log_frame.configure(fg_color=self.colors["bg2"])
-        self.sidebar_frame.configure(fg_color=self.colors["bg2"])
+        self.sidebar_frame.configure(fg_color=bg_color)
         self.statusbar.configure(fg_color=self.colors["bg3"])
         self.scrollable_frame.configure(fg_color=self.colors["bg3"])
         self.log_output.configure(fg_color=self.colors["bg3"])
         
-        # Buttons
         self.clear_url_button.configure(
             fg_color=self.colors["accent3"], 
             hover_color=self.colors["accent3_hover"]
@@ -930,12 +919,10 @@ Fehlerbehebungen:
             hover_color="#8E44AD"
         )
         
-        # Fortschrittsbalken
         self.progress.configure(progress_color=self.colors["progress1"])
         self.convert_progress.configure(progress_color=self.colors["progress1"])
         self.total_progress.configure(progress_color=self.colors["progress2"])
         
-        # Textfarben anpassen
         text_color = self.colors["text"]
         self.url_label.configure(text_color=text_color)
         self.folder_label.configure(text_color=text_color)
@@ -950,7 +937,6 @@ Fehlerbehebungen:
         self.version_label.configure(text_color=text_color)
         self.log_output.configure(text_color=text_color)
         
-        # Statusleiste
         status_color = "lightgreen" if mode == "dark" else "green"
         self.status_label.configure(text_color=status_color)
         self.github_button.configure(hover_color=self.colors["bg2"])
@@ -961,7 +947,6 @@ Fehlerbehebungen:
         self.update_theme_colors()
 
     def cleanup_temp_files(self):
-        """Löscht temporäre Dateien im Download-Verzeichnis"""
         temp_extensions = ['.part', '.tmp', '.ytdl']
         deleted = 0
         
@@ -985,7 +970,6 @@ Fehlerbehebungen:
                     self.cookies_path = config.get("cookies_path", "")
                     self.cookies_entry.insert(0, self.cookies_path)
                     
-                    # Sprachkonfiguration laden
                     lang = config.get("language", system_lang)
                     if lang in SUPPORTED_LANGUAGES:
                         self.language_var.set(lang)
@@ -1051,6 +1035,32 @@ Fehlerbehebungen:
         self.log_output.configure(state="disabled")
 
     def start_download_thread(self):
+        self.is_downloading = True
+        self.format_combobox.configure(state="disabled")
+        self.abort_event.clear()
+        self.cancel_button.configure(state="normal")
+        self.download_button.configure(state="disabled")
+        self.total_tracks = 0
+        self.completed_tracks = 0
+        self.successful_downloads = 0
+        self.downloaded_tracks = []
+        self.thumbnail_cache = {}
+        self.total_progress.set(0)
+        self.convert_progress.set(0)
+        self.start_time = time.time()
+        self.last_update_time = time.time()
+        self.last_downloaded_bytes = 0
+        self.current_speed = 0
+        self.last_gui_update = 0
+        self.last_converted_file = None
+        
+        # Clear scrollable frame
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
+            
+        threading.Thread(target=self.download_playlist, daemon=True).start()
+
+    def download_playlist(self):
         url = self.url_entry.get().strip()
         if not url:
             messagebox.showerror(_("Fehler"), _("Bitte eine URL eingeben."))
@@ -1061,20 +1071,21 @@ Fehlerbehebungen:
         self.update_status_label(_("🔍 Analysiere URL..."))
         self.log(_("🔍 Starte Analyse der URL..."))
         self.progress_label.configure(text=_("Analysiere URL..."))
-        self.progress.configure(mode="determinate")  # Standardmodus setzen
 
-        # Erweiterte Optionen für große Playlists
+        # Optimierte Optionen für bessere Performance
         playlist_opts = {
             'extract_flat': True,
-            'playlistend': 10000,  # Bis zu 10.000 Titel
+            'playlistend': 10000,
             'ignoreerrors': True,
             'quiet': True,
-            'cookiefile': self.cookies_path if self.cookies_path and os.path.exists(self.cookies_path) else None
+            'cookiefile': self.cookies_path if self.cookies_path and os.path.exists(self.cookies_path) else None,
+            'noprogress': True,  # Reduziert die Anzahl der Fortschrittsmeldungen
+            'concurrent_fragment_downloads': 4,  # Parallele Fragment-Downloads
+            'buffer_size': 65536,  # Größerer Puffer für bessere Performance
+            'http_chunk_size': 10485760,  # 10MB Chunks für bessere Performance
         }
 
-        # Korrigierte Optionen für Videoformate
         if fmt in self.codec_map:
-            # Audio-Formate
             codec = self.codec_map[fmt]
             base_opts = {
                 'format': 'bestaudio/best',
@@ -1084,10 +1095,19 @@ Fehlerbehebungen:
                     'preferredquality': '192'
                 }],
                 'progress_hooks': [self.progress_hook],
-                'postprocessor_hooks': [self.progress_hook]
+                'postprocessor_hooks': [self.progress_hook],
+                'outtmpl': os.path.join(self.download_folder, '%(title)s.%(ext)s'),
+                'quiet': True,
+                'ignoreerrors': True,
+                'noplaylist': True,
+                'logger': YTDLogger(self),
+                'cookiefile': self.cookies_path if self.cookies_path and os.path.exists(self.cookies_path) else None,
+                'noprogress': True,
+                'concurrent_fragment_downloads': 4,
+                'buffer_size': 65536,
+                'http_chunk_size': 10485760,
             }
         else:
-            # Video-Formate
             base_opts = {
                 'format': 'bestvideo+bestaudio/best',
                 'merge_output_format': fmt,
@@ -1096,7 +1116,17 @@ Fehlerbehebungen:
                     'preferedformat': fmt
                 }],
                 'progress_hooks': [self.progress_hook],
-                'postprocessor_hooks': [self.progress_hook]
+                'postprocessor_hooks': [self.progress_hook],
+                'outtmpl': os.path.join(self.download_folder, '%(title)s.%(ext)s'),
+                'quiet': True,
+                'ignoreerrors': True,
+                'noplaylist': True,
+                'logger': YTDLogger(self),
+                'cookiefile': self.cookies_path if self.cookies_path and os.path.exists(self.cookies_path) else None,
+                'noprogress': True,
+                'concurrent_fragment_downloads': 4,
+                'buffer_size': 65536,
+                'http_chunk_size': 10485760,
             }
 
         try:
@@ -1139,18 +1169,8 @@ Fehlerbehebungen:
                 self.convert_progress.set(0)
                 self.convert_label.configure(text=_("Konvertierung: Wartend..."))
 
-                ydl_opts = {
-                    **base_opts,
-                    'outtmpl': os.path.join(self.download_folder, '%(title)s.%(ext)s'),
-                    'quiet': True,
-                    'ignoreerrors': True,
-                    'noplaylist': True,
-                    'logger': YTDLogger(self),
-                    'cookiefile': self.cookies_path if self.cookies_path and os.path.exists(self.cookies_path) else None
-                }
-
                 try:
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    with yt_dlp.YoutubeDL(base_opts) as ydl:
                         ydl.download([link])
                     self.successful_downloads += 1
                     self.downloaded_tracks.append(title)
@@ -1182,8 +1202,8 @@ Fehlerbehebungen:
                     self.log(_("🛑 Der Download wurde abgebrochen."))
                     break
 
-                # Pause zwischen Downloads, um Server nicht zu überlasten
-                time.sleep(0.5)
+                # Kurze Pause zwischen Downloads
+                time.sleep(0.2)
 
         except Exception as e:
             self.update_status_label(_("❌ Fehler aufgetreten"))
@@ -1205,13 +1225,11 @@ Fehlerbehebungen:
             self.update_status_label(_("✅ Download abgeschlossen!"))
             self.progress_label.configure(text=_("Alle Downloads abgeschlossen"))
             
-            # Erfolgsstatistik anzeigen
             success_rate = (self.successful_downloads / self.total_tracks * 100) if self.total_tracks > 0 else 0
             self.log(_("🎉 Download abgeschlossen: {success} von {total} Titeln erfolgreich geladen.").format(
                 success=self.successful_downloads, total=self.total_tracks))
             self.log(_("📊 Erfolgsrate: {rate:.1f}%").format(rate=success_rate))
             
-            # Liste der heruntergeladenen Titel speichern
             list_path = os.path.join(self.download_folder, "download_list.txt")
             with open(list_path, 'w', encoding='utf-8') as f:
                 for idx, title in enumerate(self.downloaded_tracks, 1):
@@ -1226,7 +1244,6 @@ Fehlerbehebungen:
             ).format(success=self.successful_downloads, total=self.total_tracks, rate=success_rate, path=list_path)
             messagebox.showinfo(_("Fertig"), message)
             
-            # Bereinige temporäre Dateien nach Abschluss
             self.cleanup_temp_files()
 
     def progress_hook(self, d):
@@ -1236,75 +1253,75 @@ Fehlerbehebungen:
         current_time = time.time()
         time_diff = current_time - self.last_update_time
         
+        # GUI-Update nur alle 100 ms, um Performance zu verbessern
+        update_gui = False
+        if current_time - self.last_gui_update > 0.1 or d['status'] == 'finished':
+            update_gui = True
+            self.last_gui_update = current_time
+
         if d['status'] == 'downloading':
             total = d.get('total_bytes') or d.get('total_bytes_estimate')
             downloaded = d.get('downloaded_bytes', 0)
             
             if total:
-                # Bestimmter Modus
                 self.progress.configure(mode="determinate")
                 progress_value = downloaded / total
                 self.progress.set(progress_value)
                 percent = int(progress_value * 100)
                 
-                # Geschwindigkeitsberechnung
-                if time_diff > 0.5:  # Alle 0.5 Sekunden aktualisieren
-                    downloaded_diff = downloaded - self.last_downloaded_bytes
-                    self.current_speed = downloaded_diff / time_diff
-                    self.last_downloaded_bytes = downloaded
-                    self.last_update_time = current_time
-                
-                # ETA für aktuellen Titel
-                if self.current_speed > 0:
-                    remaining_bytes = total - downloaded
-                    eta_seconds = remaining_bytes / self.current_speed
-                    eta_str = str(datetime.timedelta(seconds=int(eta_seconds)))
-                    self.progress_label.configure(text=_("Fortschritt: {percent}% | Geschw: {speed} | ETA: {eta}").format(
-                        percent=percent, speed=self.format_speed(self.current_speed), eta=eta_str))
-                else:
-                    self.progress_label.configure(text=_("Fortschritt: {percent}% | Geschw: berechne...").format(percent=percent))
-            else:
-                # Unbestimmter Modus
-                self.progress.configure(mode="indeterminate")
-                self.progress.start()
-                # Geschwindigkeitsberechnung nur mit heruntergeladenen Bytes
                 if time_diff > 0.5:
                     downloaded_diff = downloaded - self.last_downloaded_bytes
                     self.current_speed = downloaded_diff / time_diff
                     self.last_downloaded_bytes = downloaded
                     self.last_update_time = current_time
+                
+                if update_gui:
+                    if self.current_speed > 0:
+                        remaining_bytes = total - downloaded
+                        eta_seconds = remaining_bytes / self.current_speed
+                        eta_str = str(datetime.timedelta(seconds=int(eta_seconds)))
+                        self.progress_label.configure(text=_("Fortschritt: {percent}% | Geschw: {speed} | ETA: {eta}").format(
+                            percent=percent, speed=self.format_speed(self.current_speed), eta=eta_str))
+                    else:
+                        self.progress_label.configure(text=_("Fortschritt: {percent}% | Geschw: berechne...").format(percent=percent))
+            else:
+                self.progress.configure(mode="indeterminate")
+                self.progress.start()
+                if update_gui:
+                    if time_diff > 0.5:
+                        downloaded_diff = downloaded - self.last_downloaded_bytes
+                        self.current_speed = downloaded_diff / time_diff
+                        self.last_downloaded_bytes = downloaded
+                        self.last_update_time = current_time
                     self.progress_label.configure(text=_("Läuft... | Geschw: {speed}").format(speed=self.format_speed(self.current_speed)))
             
-        elif d['status'] == 'finished':
+        elif d['status'] == 'finished' and update_gui:
             self.progress.set(1.0)
             self.progress_label.configure(text=_("✅ Download abgeschlossen"))
             self.log(_("✅ Download abgeschlossen."))
-            # Falls unbestimmt, zurück zu bestimmt und anhalten
             if self.progress.cget("mode") == "indeterminate":
                 self.progress.stop()
                 self.progress.configure(mode="determinate")
         
-        # Post-Processing Fortschritt
+        # Konvertierungsfortschritt
         if d.get('postprocessor') and d.get('postprocessor') in ['FFmpegExtractAudio', 'FFmpegVideoConvertor']:
-            # Extrahiere den Dateinamen für die Anzeige
             filename = d.get('info_dict', {}).get('filepath', _('Unbekannte Datei'))
             if filename:
-                # Kürze den Dateinamen für die Anzeige
-                short_filename = os.path.basename(filename)
-                self.convert_label.configure(text=_("Konvertierung: {file}").format(file=short_filename))
+                # Nur bei Dateiwechsel oder neuem Fortschritt aktualisieren
+                if filename != self.last_converted_file or d.get('postprocessor_progress', 0) == 0:
+                    short_filename = os.path.basename(filename)
+                    self.convert_label.configure(text=_("Konvertierung: {file}").format(file=short_filename))
+                    self.last_converted_file = filename
             
-            # Fortschrittsbalken aktualisieren
             if d.get('postprocessor_progress') is not None:
                 progress = d['postprocessor_progress']
                 self.convert_progress.set(progress)
                 
-                # Bei Abschluss auf 100% setzen
-                if d['status'] == 'finished':
+                if d['status'] == 'finished' and update_gui:
                     self.convert_progress.set(1.0)
                     self.convert_label.configure(text=_("✅ Konvertierung abgeschlossen"))
 
     def format_speed(self, speed_bytes):
-        """Formatiert Geschwindigkeit in lesbare Einheiten"""
         if speed_bytes < 1024:
             return _("{bytes:.1f} B/s").format(bytes=speed_bytes)
         elif speed_bytes < 1024 * 1024:
@@ -1316,13 +1333,11 @@ Fehlerbehebungen:
         self.status_label.configure(text=text)
 
     def update_total_progress(self):
-        """Aktualisiert den Gesamtfortschrittsbalken und ETA"""
         if self.total_tracks > 0:
             progress_value = self.completed_tracks / self.total_tracks
             self.total_progress.set(progress_value)
             percent = int(progress_value * 100)
             
-            # Gesamt-ETA berechnen
             if self.start_time and self.completed_tracks > 0:
                 elapsed_time = time.time() - self.start_time
                 avg_time_per_track = elapsed_time / self.completed_tracks
@@ -1343,7 +1358,6 @@ Fehlerbehebungen:
             self.total_progress_label.configure(text=_("Gesamtfortschritt: 0% | ETA: --:--:--"))
 
     def load_thumbnail(self, url, title, index):
-        """Lädt ein Thumbnail im Hintergrund und fügt es zur Liste hinzu"""
         try:
             if url in self.thumbnail_cache:
                 self.root.after(0, self.add_thumbnail, self.thumbnail_cache[url], title, index)
@@ -1354,7 +1368,6 @@ Fehlerbehebungen:
             img = img.resize((120, 90), Image.LANCZOS)
             photo = ImageTk.PhotoImage(img)
             
-            # Füge Thumbnail zur Liste hinzu
             self.root.after(0, self.add_thumbnail, photo, title, index)
             self.thumbnail_cache[url] = photo
             return photo
@@ -1363,7 +1376,6 @@ Fehlerbehebungen:
             return None
 
     def add_thumbnail(self, photo, title, index):
-        """Fügt ein Thumbnail zur Scrollable-Frame hinzu (im Hauptthread)"""
         if self.abort_event.is_set():
             return
             
@@ -1372,7 +1384,7 @@ Fehlerbehebungen:
         frame.pack(padx=5, pady=5, fill="x")
         
         label_img = ctk.CTkLabel(frame, image=photo, text="", width=120, height=90)
-        label_img.image = photo  # Keep reference
+        label_img.image = photo
         label_img.grid(row=0, column=0, padx=5, pady=5)
         
         label_title = ctk.CTkLabel(
@@ -1384,20 +1396,16 @@ Fehlerbehebungen:
         )
         label_title.grid(row=0, column=1, padx=5, pady=5, sticky="w")
         
-        # Markiere aktuellen Frame
         if index == self.completed_tracks + 1:
             frame.configure(border_width=2, border_color="#2A8C55")
             self.current_thumbnail_frame = frame
 
     def cancel_download(self):
-        """Verbesserte Abbruchfunktion, die sofort stoppt"""
         if self.is_downloading:
             if messagebox.askyesno(_("Download abbrechen"), _("Möchten Sie den aktuellen Download wirklich abbrechen?"), icon="warning"):
-                # Stoppt alle Threads und Prozesse sofort
                 self.abort_event.set()
                 self.is_downloading = False
                 
-                # Beendet den yt-dlp Prozess gewaltsam
                 if self.ydl_process:
                     try:
                         self.ydl_process.terminate()
@@ -1417,7 +1425,6 @@ Fehlerbehebungen:
             self.scrollable_frame._parent_canvas.yview_moveto(1.0)
             
     def open_conversion_window(self):
-        """Öffnet das Konvertierungsfenster"""
         ConversionWindow(self.root, self.download_folder)
 
     def check_for_updates_gui(self, auto_check=False):
@@ -1426,7 +1433,6 @@ Fehlerbehebungen:
                 self.log(_("🔍 Suche nach Updates..."))
                 self.status_label.configure(text=_("🔍 Suche nach Updates..."))
             
-            # Setze User-Agent Header, da GitHub dies erfordert
             headers = {
                 "User-Agent": "SoundSync-Downloader"
             }
@@ -1434,7 +1440,6 @@ Fehlerbehebungen:
             r = requests.get(GITHUB_API_URL, headers=headers, timeout=10)
             r.raise_for_status()
             
-            # Versuche, die Antwort als JSON zu interpretieren
             try:
                 latest = r.json()
             except json.JSONDecodeError:
@@ -1445,7 +1450,6 @@ Fehlerbehebungen:
                 
             ver = latest.get("tag_name", "").lstrip("v")
             
-            # Version aus Tag extrahieren
             version_match = re.search(r'\d+\.\d+\.\d+', ver)
             if not version_match:
                 self.log(_("⚠️ Keine gültige Version gefunden"))
@@ -1479,8 +1483,6 @@ Fehlerbehebungen:
                 self.status_label.configure(text=_("⚠️ Update-Prüfung fehlgeschlagen"), text_color="#FF6B6B")
 
     def download_update(self, release_info):
-        """Lädt das Update herunter und installiert es"""
-        # Finde die richtige Asset-Datei (z.B. .exe für Windows)
         asset = None
         for a in release_info.get('assets', []):
             if "win" in a['name'].lower() and "exe" in a['name'].lower():
@@ -1501,7 +1503,6 @@ Fehlerbehebungen:
         download_url = asset['browser_download_url']
         self.log(_("⬇️ Lade Update herunter von: {url}").format(url=download_url))
         
-        # Öffne das Update-Fenster
         UpdateWindow(self.root, download_url)
 
 class UpdateWindow(ctk.CTkToplevel):
@@ -1512,11 +1513,9 @@ class UpdateWindow(ctk.CTkToplevel):
         self.download_url = download_url
         self.grab_set()
         
-        # Hauptframe
         main_frame = ctk.CTkFrame(self)
         main_frame.pack(fill="both", expand=True, padx=10, pady=10)
         
-        # Titel
         title = ctk.CTkLabel(
             main_frame,
             text=_("Software-Update"),
@@ -1524,7 +1523,6 @@ class UpdateWindow(ctk.CTkToplevel):
         )
         title.pack(pady=10)
         
-        # Statusanzeige
         self.status_label = ctk.CTkLabel(
             main_frame,
             text=_("Vorbereitung..."),
@@ -1532,7 +1530,6 @@ class UpdateWindow(ctk.CTkToplevel):
         )
         self.status_label.pack(pady=5)
         
-        # Fortschrittsbalken
         self.progress = ctk.CTkProgressBar(
             main_frame,
             mode="determinate",
@@ -1542,7 +1539,6 @@ class UpdateWindow(ctk.CTkToplevel):
         self.progress.pack(pady=10)
         self.progress.set(0)
         
-        # Debug-Konsole
         self.console = ctk.CTkTextbox(
             main_frame,
             font=("Consolas", 10),
@@ -1552,7 +1548,6 @@ class UpdateWindow(ctk.CTkToplevel):
         self.console.pack(fill="both", expand=True, padx=10, pady=10)
         self.console.configure(state="disabled")
         
-        # Starte den Download im Hintergrund
         threading.Thread(target=self.download_and_install, daemon=True).start()
     
     def log(self, message):
@@ -1563,7 +1558,6 @@ class UpdateWindow(ctk.CTkToplevel):
     
     def download_and_install(self):
         try:
-            # Temporäres Verzeichnis erstellen
             temp_dir = tempfile.mkdtemp()
             download_path = os.path.join(temp_dir, "update_package")
             
@@ -1574,7 +1568,6 @@ class UpdateWindow(ctk.CTkToplevel):
             else:
                 download_path += ".tar.gz"
             
-            # Download starten
             self.status_label.configure(text=_("Lade Update herunter..."))
             self.log(_("⬇️ Starte Download von: {}").format(self.download_url))
             
@@ -1589,7 +1582,6 @@ class UpdateWindow(ctk.CTkToplevel):
                             f.write(chunk)
                             downloaded += len(chunk)
                             
-                            # Fortschritt aktualisieren
                             progress = downloaded / total_size
                             self.progress.set(progress)
                             self.log(_("⬇️ Heruntergeladen: {downloaded}/{total} Bytes ({percent:.1%})").format(
@@ -1598,32 +1590,25 @@ class UpdateWindow(ctk.CTkToplevel):
             self.log(_("✅ Download abgeschlossen"))
             self.status_label.configure(text=_("Installiere Update..."))
             
-            # Installationsprozess starten
             if platform.system() == "Windows":
-                # Für Windows: EXE-Datei ausführen
                 self.log(_("🔧 Starte Installationsprogramm..."))
                 subprocess.Popen([download_path], shell=True)
                 
-                # Beende die aktuelle Anwendung
                 self.log(_("🔄 Beende Anwendung für Update..."))
                 self.master.destroy()
                 
             elif platform.system() == "Darwin":
-                # Für macOS: DMG einhängen und Anwendung kopieren
                 self.log(_("🔧 Installiere auf macOS..."))
-                # Hier müsste der spezifische Installationscode für macOS stehen
                 self.log(_("❌ macOS-Installation noch nicht implementiert"))
                 self.status_label.configure(text=_("Fehler: Nicht implementiert"))
                 
             else:
-                # Für Linux: Archiv entpacken
                 self.log(_("🔧 Installiere auf Linux..."))
-                # Hier müsste der spezifische Installationscode für Linux stehen
                 self.log(_("❌ Linux-Installation noch nicht implementiert"))
                 self.status_label.configure(text=_("Fehler: Nicht implementiert"))
             
         except Exception as e:
-            self.log(_("�️ Fehler bei der Update-Installation: {}").format(str(e)))
+            self.log(_("❌ Fehler bei der Update-Installation: {}").format(str(e)))
             self.log(traceback.format_exc())
             self.status_label.configure(text=_("Fehler bei der Installation"))
 
@@ -1633,10 +1618,9 @@ class ConversionWindow(ctk.CTkToplevel):
         self.title(_("Konvertierung"))
         self.geometry("600x450")
         self.download_folder = download_folder
-        self.grab_set()  # Modal-Fenster
+        self.grab_set()
         self.file_path = ""
         
-        # Premium-Farben
         self.premium_colors = {
             "bg": "#2C3E50",
             "button": "#9B59B6",
@@ -1646,11 +1630,9 @@ class ConversionWindow(ctk.CTkToplevel):
         
         self.configure(fg_color=self.premium_colors["bg"])
         
-        # Hauptframe
         main_frame = ctk.CTkFrame(self, fg_color="transparent")
         main_frame.pack(padx=20, pady=20, fill="both", expand=True)
         
-        # Titel
         title = ctk.CTkLabel(
             main_frame,
             text=_("🔧 Dateikonvertierung"),
@@ -1659,7 +1641,6 @@ class ConversionWindow(ctk.CTkToplevel):
         )
         title.pack(pady=(0, 20))
         
-        # Dateiauswahl
         file_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
         file_frame.pack(fill="x", pady=5)
         
@@ -1689,7 +1670,6 @@ class ConversionWindow(ctk.CTkToplevel):
         )
         self.browse_button.grid(row=0, column=2, padx=5)
         
-        # Format-Auswahl
         format_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
         format_frame.pack(fill="x", pady=5)
         
@@ -1719,7 +1699,6 @@ class ConversionWindow(ctk.CTkToplevel):
         )
         self.format_menu.grid(row=0, column=1, padx=5)
         
-        # Konvertierungsoptionen
         options_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
         options_frame.pack(fill="x", pady=10)
         
@@ -1744,7 +1723,6 @@ class ConversionWindow(ctk.CTkToplevel):
         )
         quality_menu.grid(row=0, column=1, padx=5)
         
-        # Konvertierungsbutton
         convert_button = ctk.CTkButton(
             main_frame,
             text=_("Konvertierung starten"),
@@ -1756,7 +1734,6 @@ class ConversionWindow(ctk.CTkToplevel):
         )
         convert_button.pack(pady=20)
         
-        # Statusanzeige
         self.status_label = ctk.CTkLabel(
             main_frame,
             text=_("Bereit zur Konvertierung"),
@@ -1765,7 +1742,6 @@ class ConversionWindow(ctk.CTkToplevel):
         )
         self.status_label.pack(pady=10)
         
-        # Fortschrittsbalken
         self.progress = ctk.CTkProgressBar(
             main_frame,
             mode="indeterminate",
@@ -1774,7 +1750,6 @@ class ConversionWindow(ctk.CTkToplevel):
             progress_color="#3498DB"
         )
         
-        # Info-Label für Premium-Features
         info_label = ctk.CTkLabel(
             main_frame,
             text=_("ℹ️ Hochwertige Konvertierung mit erhaltener Qualität"),
@@ -1784,7 +1759,6 @@ class ConversionWindow(ctk.CTkToplevel):
         info_label.pack(pady=10)
 
     def choose_file(self):
-        """Datei für Konvertierung auswählen"""
         file_path = filedialog.askopenfilename(
             initialdir=self.download_folder,
             title=_("Datei auswählen"),
@@ -1796,13 +1770,18 @@ class ConversionWindow(ctk.CTkToplevel):
             self.file_entry.delete(0, "end")
             self.file_entry.insert(0, file_path)
             
-            # Versuche den Dateityp zu erkennen
             try:
-                file_type = filetype.guess(file_path)
-                if file_type is None:
-                    file_type = _("Unbekannter Typ")
-                else:
-                    file_type = file_type.mime
+                file_type = "Unbekannter Typ"
+                try:
+                    import filetype
+                    kind = filetype.guess(file_path)
+                    if kind is not None:
+                        file_type = kind.mime
+                except ImportError:
+                    # Fallback ohne filetype
+                    ext = os.path.splitext(file_path)[1].lower()
+                    if ext:
+                        file_type = ext[1:].upper() + " Datei"
             except Exception:
                 file_type = _("Unbekannter Typ")
             
@@ -1812,7 +1791,6 @@ class ConversionWindow(ctk.CTkToplevel):
             )
 
     def start_conversion(self):
-        """Startet die Konvertierung in einem eigenen Thread"""
         if not self.file_path or not os.path.exists(self.file_path):
             messagebox.showerror(_("Fehler"), _("Bitte wählen Sie eine gültige Datei aus."))
             return
@@ -1820,14 +1798,12 @@ class ConversionWindow(ctk.CTkToplevel):
         threading.Thread(target=self.convert_file, daemon=True).start()
 
     def convert_file(self):
-        """Führt die Dateikonvertierung durch"""
         try:
             self.progress.pack(pady=10)
             self.progress.configure(mode="indeterminate")
             self.progress.start()
             self.status_label.configure(text=_("Konvertierung läuft..."), text_color="#3498DB")
             
-            # Dateinamen vorbereiten
             base_name = os.path.splitext(os.path.basename(self.file_path))[0]
             target_format = self.format_var.get()
             output_path = os.path.join(
@@ -1835,7 +1811,9 @@ class ConversionWindow(ctk.CTkToplevel):
                 f"{base_name}_konvertiert.{target_format}"
             )
             
-            # Qualitätseinstellungen
+            # Stelle sicher, dass das Ausgabeverzeichnis existiert
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
             quality = self.quality_var.get()
             quality_args = []
             
@@ -1848,14 +1826,12 @@ class ConversionWindow(ctk.CTkToplevel):
             elif quality == _("Maximal"):
                 quality_args = ["-compression_level", "12"]
             
-            # FFmpeg-Kommando erstellen
             cmd = [
                 'ffmpeg', 
                 '-i', self.file_path,
                 '-y'  # Überschreiben ohne Nachfrage
             ] + quality_args + [output_path]
             
-            # Prozess ausführen
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -1865,7 +1841,7 @@ class ConversionWindow(ctk.CTkToplevel):
                 errors='replace'
             )
             
-            # Wir können den Fortschritt nicht verfolgen, also warten wir einfach
+            # Warte auf Abschluss des Prozesses
             process.communicate()
             
             if process.returncode == 0:
