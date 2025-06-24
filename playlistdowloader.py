@@ -50,7 +50,11 @@ DEFAULT_LANGUAGE = 'en'
 
 # Versuche Systemsprache zu erkennen
 try:
-    system_lang = locale.getdefaultlocale()[0][:2]
+    # Aktualisierte Methode zur Spracherkennung
+    current_locale = locale.getlocale()
+    system_lang = current_locale[0] if current_locale else DEFAULT_LANGUAGE
+    if system_lang:
+        system_lang = system_lang.split('_')[0]
     if system_lang not in SUPPORTED_LANGUAGES:
         system_lang = DEFAULT_LANGUAGE
 except:
@@ -337,7 +341,13 @@ class DownloaderApp:
         self.cookies_path = ""
         self.current_thumbnail_frame = None
         self.ydl_process = None
+        # Sprachauswahl - KORRIGIERT
         self.language_var = ctk.StringVar(value=current_language)
+        self.language_mapping = {
+            'en': 'English',
+            'de': 'Deutsch',
+            'pl': 'Polski'
+        }
 
         # Hauptlayout mit 2 Spalten
         self.root.grid_columnconfigure(0, weight=3)  # Hauptbereich
@@ -377,11 +387,11 @@ class DownloaderApp:
         )
         self.theme_switch.grid(row=0, column=2, padx=15, pady=10, sticky="e")
         
-        # Sprachauswahl
+        # Sprachauswahl-Combobox mit String-Werten
         self.language_menu = ctk.CTkComboBox(
             self.header_frame,
             variable=self.language_var,
-            values=[("English", "en"), ("Deutsch", "de"), ("Polski", "pl")],
+            values=[self.language_mapping[lang] for lang in SUPPORTED_LANGUAGES],
             command=self.change_language,
             width=120
         )
@@ -763,7 +773,13 @@ class DownloaderApp:
 
     def change_language(self, choice):
         """Wechselt die Sprache der Anwendung"""
-        lang_code = choice.split(":")[1].strip() if ":" in choice else choice
+        # Umkehrung des Mappings für die Code-Erkennung
+        reverse_mapping = {v: k for k, v in self.language_mapping.items()}
+        lang_code = reverse_mapping.get(choice)
+        
+        if not lang_code:
+            return
+            
         global current_language, _
         
         if lang_code in SUPPORTED_LANGUAGES:
@@ -839,7 +855,7 @@ class DownloaderApp:
         
         if not disable_changelog:
             # Beispiel-Changelog - sollte durch echten Inhalt ersetzt werden
-            changelog = _("""Version 1.8.5 - Änderungsprotokoll
+            changelog = _("""Version 1.9 - Änderungsprotokoll
 
 Neue Funktionen:
 - Sprachauswahl für Englisch, Deutsch und Polnisch
@@ -1401,7 +1417,7 @@ Fehlerbehebungen:
             self.scrollable_frame._parent_canvas.yview_moveto(1.0)
             
     def open_conversion_window(self):
-        """Öffnet das Premium-Konvertierungsfenster"""
+        """Öffnet das Konvertierungsfenster"""
         ConversionWindow(self.root, self.download_folder)
 
     def check_for_updates_gui(self, auto_check=False):
@@ -1614,7 +1630,7 @@ class UpdateWindow(ctk.CTkToplevel):
 class ConversionWindow(ctk.CTkToplevel):
     def __init__(self, parent, download_folder):
         super().__init__(parent)
-        self.title(_("Premium Konvertierung"))
+        self.title(_("Konvertierung"))
         self.geometry("600x450")
         self.download_folder = download_folder
         self.grab_set()  # Modal-Fenster
@@ -1637,7 +1653,7 @@ class ConversionWindow(ctk.CTkToplevel):
         # Titel
         title = ctk.CTkLabel(
             main_frame,
-            text=_("🔧 Premium Dateikonvertierung"),
+            text=_("🔧 Dateikonvertierung"),
             font=("Segoe UI", 16, "bold"),
             text_color="#F1C40F"
         )
