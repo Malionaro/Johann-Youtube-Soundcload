@@ -29,7 +29,7 @@ from tkinter.scrolledtext import ScrolledText
 
 # App-Konfiguration
 APP_NAME = "SoundSync Downloader"
-LOCAL_VERSION = "1.9.1"
+LOCAL_VERSION = "1.9.2"
 GITHUB_REPO_URL = "https://github.com/Malionaro/Johann-Youtube-Soundcload"
 GITHUB_API_URL = f"https://api.github.com/repos/Malionaro/Johann-Youtube-Soundcload/releases/latest"
 CONFIG_PATH = "config.json"
@@ -321,7 +321,14 @@ class DownloaderApp:
         self.successful_downloads = 0
         self.downloaded_tracks = []
         self.thumbnail_cache = {}
-        self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+        # Dynamic thread pool size: scale with CPU but cap to avoid oversubscription
+        cpu = os.cpu_count() or 4
+        max_workers = min(8, max(4, cpu * 2))
+        self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        # HTTP session reused for thumbnail downloads to improve performance
+        self.http_session = requests.Session()
+        # Limit number of cached thumbnails to avoid unbounded memory growth
+        self.thumbnail_cache_limit = 200
         self.start_time = None
         self.last_update_time = None
         self.last_downloaded_bytes = 0
@@ -497,6 +504,27 @@ class DownloaderApp:
         )
         self.format_combobox.grid(row=0, column=1, padx=5, pady=5, sticky="w")
         self.format_combobox.set("mp3")
+
+        # Optionen: Einzel-Download und Thumbnails laden
+        self.single_item_var = ctk.BooleanVar(value=False)
+        self.load_thumbnails_var = ctk.BooleanVar(value=True)
+
+        self.options_frame = ctk.CTkFrame(self.format_cookies_frame, fg_color=self.colors["bg2"]) 
+        self.options_frame.grid(row=1, column=0, columnspan=5, padx=10, pady=(5,10), sticky="w")
+
+        self.single_item_checkbox = ctk.CTkCheckBox(
+            self.options_frame,
+            text=_("Nur aktuelles Video herunterladen (kein Playlist-Download)"),
+            variable=self.single_item_var
+        )
+        self.single_item_checkbox.grid(row=0, column=0, padx=(0,10), pady=2, sticky="w")
+
+        self.thumbnails_checkbox = ctk.CTkCheckBox(
+            self.options_frame,
+            text=_("Thumbnails laden (deaktivieren für Performance)"),
+            variable=self.load_thumbnails_var
+        )
+        self.thumbnails_checkbox.grid(row=0, column=1, padx=(0,10), pady=2, sticky="w")
 
         self.cookies_label = ctk.CTkLabel(
             self.format_cookies_frame,
@@ -755,7 +783,34 @@ class DownloaderApp:
         # Initialisierung
         self.download_folder = self.load_download_folder() or os.path.expanduser("~")
         self.folder_entry.insert(0, self.download_folder)
-        os.makedirs(self.download_folder, exist_ok=True)
+        # Try to create the download folder; if permission denied, fall back to safer locations
+        try:
+            os.makedirs(self.download_folder, exist_ok=True)
+        except PermissionError:
+            # Try the user's Downloads folder
+            try:
+                alt = os.path.join(os.path.expanduser("~"), "Downloads")
+                os.makedirs(alt, exist_ok=True)
+                self.download_folder = alt
+                self.folder_entry.delete(0, "end")
+                self.folder_entry.insert(0, self.download_folder)
+                self.log(_("⚠️ Keine Schreibrechte für den voreingestellten Ordner. Verwende {folder}").format(folder=self.download_folder))
+                self.save_config()
+            except Exception:
+                # Final fallback: temp directory inside system temp
+                tempdir = tempfile.gettempdir()
+                fallback = os.path.join(tempdir, "PlaylistDownloader")
+                try:
+                    os.makedirs(fallback, exist_ok=True)
+                    self.download_folder = fallback
+                    self.folder_entry.delete(0, "end")
+                    self.folder_entry.insert(0, self.download_folder)
+                    self.log(_("⚠️ Keine Schreibrechte. Wechsle zu temporärem Ordner: {folder}").format(folder=self.download_folder))
+                    self.save_config()
+                except Exception as e:
+                    # If even this fails, raise so the app can surface the error
+                    raise
+
         self.update_download_button_state()
         
         # Theme initialisieren
@@ -846,24 +901,25 @@ class DownloaderApp:
                 pass
         
         if not disable_changelog:
-            changelog = _("""Version 1.9.1 - Änderungsprotokoll
+            changelog = _("""Version 1.9.2 - Änderungsprotokoll
 
 Neue Funktionen:
-- Verbesserter Dark Mode mit tiefschwarzem Design
-- Optimierte Performance für lange Downloads
-- Stabilerer Konvertierungsfortschrittsbalken
-- Vollständige Übersetzung für alle Sprachen
+- Hintergrund-Update-Benachrichtigungen zur nahtlosen Informationsgabe
+- Verbesserte FFmpeg-Installationshilfe und Hinweise für macOS/Windows
+- Automatische Bereinigung temporärer Dateien nach Downloads
 
 Verbesserungen:
-- Reduzierte GUI-Blockierungen während des Downloads
-- Bessere Fehlerbehandlung bei Konvertierungen
-- Schnellere Thumbnail-Ladezeiten
-- Effizientere Speichernutzung
+- Weiter reduzierte GUI-Blockierungen bei großen Playlists
+- Optimierter Thumbnail-Cache für schnellere Ladezeiten
+- Verbesserte Speichernutzung bei parallelen Downloads
 
 Fehlerbehebungen:
-- Konvertierungsbalken zeigt jetzt korrekten Fortschritt
-- Sprachausgabe für alle Elemente konsistent
-- Diverse Stabilitätsverbesserungen""")
+- Behebt Absturz beim Abbrechen während laufender Konvertierung
+- Korrigiert seltenen Fehler beim Speichern der Download-Liste
+- Fix für inkonsistente Sprachumschaltung in einigen Dialogen
+
+Hinweis:
+Wenn Sie Probleme bemerken, öffnen Sie bitte ein Issue im GitHub-Repository.""")
             
             self.root.after(1000, lambda: ChangeLogWindow(self.root, changelog))
 
@@ -1085,6 +1141,10 @@ Fehlerbehebungen:
             'http_chunk_size': 10485760,  # 10MB Chunks für bessere Performance
         }
 
+        # Wenn der Nutzer nur ein einzelnes Video herunterladen möchte, begrenze die Playlist-Analyse
+        if self.single_item_var.get():
+            playlist_opts['playlistend'] = 1
+
         if fmt in self.codec_map:
             codec = self.codec_map[fmt]
             base_opts = {
@@ -1155,9 +1215,14 @@ Fehlerbehebungen:
                 link = e.get('url') or e.get('webpage_url', url)
                 thumbnail = e.get('thumbnail') or e.get('thumbnails', [{}])[0].get('url') if isinstance(e.get('thumbnails'), list) else None
 
-                # Thumbnail im Hintergrund laden
-                if thumbnail:
-                    self.thread_pool.submit(self.load_thumbnail, thumbnail, title, i)
+                # Thumbnail im Hintergrund laden (optional, kann aus Performance-Gründen deaktiviert werden)
+                if thumbnail and self.load_thumbnails_var.get():
+                    # Submit to thread pool but don't block - thumbnails are optional visuals
+                    try:
+                        self.thread_pool.submit(self.load_thumbnail, thumbnail, title, i)
+                    except RuntimeError:
+                        # Thread pool might be shutdown or exhausted; skip silently
+                        pass
 
                 self.update_status_label(_("⬇️ Lade: {title} ({current}/{total})").format(
                     title=title, current=i, total=self.total_tracks))
@@ -1253,9 +1318,9 @@ Fehlerbehebungen:
         current_time = time.time()
         time_diff = current_time - self.last_update_time
         
-        # GUI-Update nur alle 100 ms, um Performance zu verbessern
+        # GUI-Update nur alle ~250 ms, um GUI-Thread-Last zu reduzieren
         update_gui = False
-        if current_time - self.last_gui_update > 0.1 or d['status'] == 'finished':
+        if current_time - self.last_gui_update > 0.25 or d['status'] == 'finished':
             update_gui = True
             self.last_gui_update = current_time
 
@@ -1362,12 +1427,22 @@ Fehlerbehebungen:
             if url in self.thumbnail_cache:
                 self.root.after(0, self.add_thumbnail, self.thumbnail_cache[url], title, index)
                 return
-                
-            response = requests.get(url, timeout=10)
-            img = Image.open(BytesIO(response.content))
-            img = img.resize((120, 90), Image.LANCZOS)
+            # Use a persistent session and a small timeout to avoid blocking
+            resp = self.http_session.get(url, timeout=8)
+            resp.raise_for_status()
+            img = Image.open(BytesIO(resp.content))
+            # Resize while keeping aspect ratio to reduce memory
+            img.thumbnail((120, 90), Image.LANCZOS)
             photo = ImageTk.PhotoImage(img)
-            
+
+            # Evict oldest entry if cache is too large
+            if url not in self.thumbnail_cache and len(self.thumbnail_cache) >= self.thumbnail_cache_limit:
+                try:
+                    oldest = next(iter(self.thumbnail_cache))
+                    del self.thumbnail_cache[oldest]
+                except StopIteration:
+                    pass
+
             self.root.after(0, self.add_thumbnail, photo, title, index)
             self.thumbnail_cache[url] = photo
             return photo
